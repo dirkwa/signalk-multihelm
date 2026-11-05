@@ -1,0 +1,6 @@
+plugin/
+node_modules/
+coverage/
+package-lock.json
+# Rewritten by release-please on every release, in its own format.
+.release-please-manifest.json
