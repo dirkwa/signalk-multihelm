@@ -124,7 +124,8 @@ export class MasterProxy {
       return null
     }
     for (const prefix of this.prefixes.values()) {
-      if (path.startsWith(prefix)) {
+      // A collection is listed at the prefix without its slash.
+      if (path.startsWith(prefix) || path === prefix.slice(0, -1)) {
         return target
       }
     }

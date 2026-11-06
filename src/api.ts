@@ -118,7 +118,8 @@ export interface MultihelmApi {
   /**
    * Lets this server serve the master's GET requests under `prefix` (a path
    * ending in `/`, e.g. `/signalk/v1/api/resources/charts/`) at
-   * `masterPath(...)`, to anyone who may read on this server. Admin and
+   * `masterPath(...)`, to anyone who may read on this server; the prefix
+   * without its `/` is served too, where a collection is listed. Admin and
    * access routes are refused.
    */
   registerMasterRoute: (prefix: string) => MasterRouteHandle

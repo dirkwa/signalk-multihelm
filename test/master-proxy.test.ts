@@ -104,6 +104,15 @@ describe('MasterProxy', () => {
     expect(seen[0]?.headers.cookie).toBeUndefined()
   })
 
+  it('forwards the listing at the prefix without its slash, but no sibling path', async () => {
+    proxy.register('/signalk/v2/api/resources/charts/')
+    const listing = await fetch(`${base(front)}/master/signalk/v2/api/resources/charts`)
+    const sibling = await fetch(`${base(front)}/master/signalk/v2/api/resources/chartsx`)
+
+    expect([listing.status, sibling.status]).toEqual([200, 404])
+    expect(seen.map((s) => s.url)).toEqual(['/signalk/v2/api/resources/charts'])
+  })
+
   it('refuses paths no plugin registered, and traversal out of a registered one', async () => {
     const handle = proxy.register('/signalk/v1/api/resources/charts/')
     const outside = await fetch(`${base(front)}/master/signalk/v1/api/vessels/self`)
