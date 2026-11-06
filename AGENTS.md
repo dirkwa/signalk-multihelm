@@ -18,8 +18,10 @@ sets by hand on one server (see `README.md`).
   tokens), one library per dataset.
 - `peer-client.ts` — HTTP to peers: hello, manifest, file with `Range`
   resume, device access requests.
-- `routes.ts` — readonly `hello`/`manifest`/`file` via `router.access`;
-  admin `status`, `peers`, `run`.
+- `routes.ts` — readonly `hello`/`manifest`/`file` and `master/*` via
+  `router.access`; admin `status`, `peers`, `run`.
+- `master-proxy.ts` — `MasterProxy`: on a member, serves the master's GET
+  answers under the prefixes plugins registered, with the pairing token.
 - `discovery.ts` — mDNS browse for `_signalk-http(s)._tcp`.
 - `vessel-settings.ts` — the vessel data and path metadata the user set,
   read from the server's base deltas (`app.config.baseDeltaEditor`).
@@ -40,6 +42,11 @@ sets by hand on one server (see `README.md`).
   within `MASTER_STALE_MS`. Every server must reach the same answer.
 - **A file is served only if its dataset lists it**, and only while it still
   has the size and time that were hashed.
+- **`master/*` forwards only** GET, only to the paired master, only under a
+  registered prefix, with the pairing token and none of the caller's
+  credentials; admin and access routes are never registrable. It sits
+  behind this server's own security, so it gives no one more than they may
+  read here.
 
 ## Gotchas
 
