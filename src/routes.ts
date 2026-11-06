@@ -5,12 +5,14 @@
  * they got when pairing, so those are registered with readonly access
  * (`router.access`, signalk-server 2.31 and later). Without it plugin routes
  * are admin-only, a readonly token cannot reach them, and `status` says
- * Multihelm is unavailable. Pairing and the status page stay admin-only.
+ * Multihelm is unavailable. `master/…` serves the master's answers to anyone
+ * who may read here. Pairing and the status page stay admin-only.
  */
 
 import type { IRouter, Request, Response } from 'express'
 
 import type { DiscoveredServer } from './discovery.js'
+import { MASTER_ROUTE, type MasterProxy } from './master-proxy.js'
 import type { Multihelm } from './multihelm.js'
 import type { VesselSettings } from './vessel-settings.js'
 
@@ -39,7 +41,8 @@ export function registerRoutes(
   router: IRouter,
   multihelm: () => Multihelm | null,
   discovered: () => DiscoveredServer[],
-  vesselSettings: () => VesselSettings | null = () => null
+  vesselSettings: () => VesselSettings | null = () => null,
+  masterProxy: () => MasterProxy | null = () => null
 ): void {
   const scoped = (router as RouterWithAccess).access
   const available = typeof scoped === 'function'
@@ -119,6 +122,22 @@ export function registerRoutes(
       res.sendFile(file, { acceptRanges: true, dotfiles: 'allow' })
     })
   )
+
+  const forwardToMaster: Handler = (req, res) => {
+    const proxy = masterProxy()
+    if (!proxy) {
+      res.status(503).json({ error: 'Multihelm is not running' })
+      return
+    }
+    proxy.forward(req.url.slice(MASTER_ROUTE.length), req, res)
+  }
+  // The master's answer goes to whoever may read here; this server's own security decides who that is.
+  // Express 4, which signalk-server runs, and Express 5 spell a wildcard differently.
+  try {
+    readonly.get(`${MASTER_ROUTE}/*`, forwardToMaster)
+  } catch {
+    readonly.get(`${MASTER_ROUTE}/*path`, forwardToMaster)
+  }
 
   router.get('/status', (_req: Request, res: Response) => {
     const mh = multihelm()

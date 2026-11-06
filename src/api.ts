@@ -90,6 +90,17 @@ export interface PeerInfo {
  */
 export type Role = 'master' | 'member'
 
+export interface MasterRouteHandle {
+  unregister: () => void
+}
+
+export interface MasterResponse {
+  status: number
+  /** The response headers that matter to a reader: type, length, caching. */
+  headers: Record<string, string>
+  body: Buffer
+}
+
 export interface MultihelmApi {
   registerDataset: (definition: DatasetDefinition) => DatasetHandle
   peers: () => PeerInfo[]
@@ -104,6 +115,17 @@ export interface MultihelmApi {
    * its server becomes the master and stops it when it no longer is.
    */
   onRoleChanged: (cb: (role: Role, master: PeerInfo | null) => void) => () => void
+  /**
+   * Lets this server serve the master's GET requests under `prefix` (a path
+   * ending in `/`, e.g. `/signalk/v1/api/resources/charts/`) at
+   * `masterPath(...)`, to anyone who may read on this server. Admin and
+   * access routes are refused.
+   */
+  registerMasterRoute: (prefix: string) => MasterRouteHandle
+  /** Where this server serves the master's `path`, e.g. for a tile URL handed to a browser. */
+  masterPath: (path: string) => string
+  /** Reads the master's `path`, under a registered prefix; rejects when there is no master. */
+  fetchMaster: (path: string) => Promise<MasterResponse>
 }
 
 export type MultihelmProperty = { apiVersion: typeof API_VERSION } & Partial<MultihelmApi>

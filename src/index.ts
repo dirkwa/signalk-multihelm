@@ -12,7 +12,9 @@ import {
 } from './api.js'
 import { ServerDiscovery } from './discovery.js'
 import { MasterFollower } from './follow-master.js'
+import { MASTER_ROUTE, MasterProxy } from './master-proxy.js'
 import { Multihelm, ROUND_INTERVAL_MS } from './multihelm.js'
+import { ROUTE_PREFIX } from './peer-client.js'
 import { registerRoutes } from './routes.js'
 import { MultihelmStore } from './store.js'
 import { vesselSettingsFromDeltas } from './vessel-settings.js'
@@ -71,6 +73,7 @@ export default function (app: ServerAPI): Plugin {
   const host = app as Host
   let multihelm: Multihelm | null = null
   let discovery: ServerDiscovery | null = null
+  let masterProxy: MasterProxy | null = null
   let stopRoleStatus: (() => void) | null = null
   let stopFollowing: (() => void) | null = null
 
@@ -115,6 +118,8 @@ export default function (app: ServerAPI): Plugin {
         }
       })
       multihelm = mh
+      const proxy = new MasterProxy(() => mh.masterAccess())
+      masterProxy = proxy
       discovery = new ServerDiscovery(() => host.config?.getExternalPort?.())
       discovery.start()
       mh.start()
@@ -125,7 +130,10 @@ export default function (app: ServerAPI): Plugin {
         serverId: () => mh.serverId,
         role: () => mh.role(),
         master: () => mh.master(),
-        onRoleChanged: (cb) => mh.onRoleChanged(cb)
+        onRoleChanged: (cb) => mh.onRoleChanged(cb),
+        registerMasterRoute: (prefix) => proxy.register(prefix),
+        masterPath: (target) => `${ROUTE_PREFIX}${MASTER_ROUTE}${target}`,
+        fetchMaster: (target) => proxy.fetch(target)
       })
       const follower = new MasterFollower({
         store,
@@ -190,6 +198,8 @@ export default function (app: ServerAPI): Plugin {
       }
       multihelm?.stop()
       multihelm = null
+      masterProxy?.stop()
+      masterProxy = null
       discovery?.stop()
       discovery = null
     },
@@ -199,7 +209,8 @@ export default function (app: ServerAPI): Plugin {
         router,
         () => multihelm,
         () => discovery?.list() ?? [],
-        localVesselSettings
+        localVesselSettings,
+        () => masterProxy
       )
     }
   }

@@ -52,6 +52,20 @@ server that is not the master (the plugin status says so while it waits). A
 server without security needs nothing. A new MMSI takes effect on that server
 at its next restart, as when it is changed by hand.
 
+## Using the master's services
+
+A plugin can let the other servers serve what the master provides, without a
+copy of their own: charts, for example. Each server then answers at
+`/plugins/signalk-multihelm/master/<path>` with the master's answer, so a
+browser at a station only ever talks to its own server, with its own login.
+
+Only GET requests are forwarded, only to the paired master, and only under
+the paths a plugin registered; admin and login routes never are. The master
+is asked with the readonly pairing token, never with the caller's
+credentials, and the route follows this server's own security: whoever may
+not read here cannot read through it either. While no other server is the
+master, it answers 503.
+
 ## How replication works
 
 - Each entry of a dataset carries a counter and the server that last changed
@@ -68,12 +82,16 @@ at its next restart, as when it is changed by hand.
 ## For plugin authors
 
 Multihelm publishes its API as the PropertyValue `multihelm`:
-`{ apiVersion: 1, registerDataset, peers, serverId, role, master, onRoleChanged }`
+`{ apiVersion: 1, registerDataset, peers, serverId, role, master, onRoleChanged, registerMasterRoute, masterPath, fetchMaster }`
 from its start, and
 `{ apiVersion: 1 }` after its stop. Follow the last value, register your
 datasets whenever the methods appear, and unregister in your own `stop()`.
 The types are in [`src/api.ts`](src/api.ts). A plugin that runs on the master
 only starts its work when `role()` is `'master'` and follows `onRoleChanged`.
+A plugin that serves the master's data on the other servers registers the
+path prefix it needs with `registerMasterRoute('/signalk/v1/api/resources/charts/')`,
+hands browsers `masterPath(path)` and reads the master itself with
+`fetchMaster(path)`.
 
 ```ts
 app.onPropertyValues('multihelm', (values) => {
