@@ -14,6 +14,7 @@ import { ServerDiscovery } from './discovery.js'
 import { Multihelm } from './multihelm.js'
 import { registerRoutes } from './routes.js'
 import { MultihelmStore } from './store.js'
+import { vesselSettingsFromDeltas } from './vessel-settings.js'
 
 const PLUGIN_ID = 'signalk-multihelm'
 
@@ -38,7 +39,10 @@ function statusText(role: Role, master: PeerInfo | null, conflict: boolean): str
 
 /** The parts of the server the typed API leaves out. */
 type Host = ServerAPI & {
-  config?: { getExternalPort?: () => number }
+  config?: {
+    getExternalPort?: () => number
+    baseDeltaEditor?: { deltas?: unknown }
+  }
 }
 
 export default function (app: ServerAPI): Plugin {
@@ -107,7 +111,11 @@ export default function (app: ServerAPI): Plugin {
       registerRoutes(
         router,
         () => multihelm,
-        () => discovery?.list() ?? []
+        () => discovery?.list() ?? [],
+        () => {
+          const deltas = host.config?.baseDeltaEditor?.deltas
+          return deltas === undefined ? null : vesselSettingsFromDeltas(deltas)
+        }
       )
     }
   }

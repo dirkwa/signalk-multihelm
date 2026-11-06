@@ -1,7 +1,7 @@
 /**
  * Routes under `/plugins/signalk-multihelm/`.
  *
- * Peers read `hello`, `manifest` and `file` with the readonly device token
+ * Peers read `hello`, `manifest`, `file` and `vessel-settings` with the readonly device token
  * they got when pairing, so those are registered with readonly access
  * (`router.access`, signalk-server 2.31 and later). Without it plugin routes
  * are admin-only, a readonly token cannot reach them, and `status` says
@@ -12,6 +12,7 @@ import type { IRouter, Request, Response } from 'express'
 
 import type { DiscoveredServer } from './discovery.js'
 import type { Multihelm } from './multihelm.js'
+import type { VesselSettings } from './vessel-settings.js'
 
 type Handler = (req: Request, res: Response) => void | Promise<void>
 
@@ -37,7 +38,8 @@ function errorText(error: unknown): string {
 export function registerRoutes(
   router: IRouter,
   multihelm: () => Multihelm | null,
-  discovered: () => DiscoveredServer[]
+  discovered: () => DiscoveredServer[],
+  vesselSettings: () => VesselSettings | null = () => null
 ): void {
   const scoped = (router as RouterWithAccess).access
   const available = typeof scoped === 'function'
@@ -69,6 +71,18 @@ export function registerRoutes(
     '/hello',
     running((mh, _req, res) => {
       res.json(mh.hello())
+    })
+  )
+
+  readonly.get(
+    '/vessel-settings',
+    running((_mh, _req, res) => {
+      const settings = vesselSettings()
+      if (!settings) {
+        res.status(501).json({ error: 'this server does not expose its vessel settings' })
+        return
+      }
+      res.json(settings)
     })
   )
 
