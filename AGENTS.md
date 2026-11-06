@@ -42,6 +42,12 @@ master (see `README.md`).
   waits the settle time before it goes out again; a change of meta alone
   does not wait.
 
+## Code style
+
+- **Code explains itself.** Names and small functions carry the meaning;
+  a comment says why, never what, and only where the code cannot. No
+  docstrings for their own sake, no long or echo comments.
+
 ## Commands
 
 - `npm run format` — prettier + eslint --fix
