@@ -11,7 +11,7 @@ export default defineConfig({
     // A Node build: dependencies stay external and no browser shims are added.
     ssr: 'src/index.ts',
     outDir: 'plugin',
-    target: 'node22',
+    target: 'node24',
     sourcemap: true,
     rolldownOptions: {
       output: { format: 'es', entryFileNames: 'index.js' }
