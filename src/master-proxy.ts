@@ -79,7 +79,10 @@ export function isValidPrefix(prefix: string): boolean {
     prefix.length > 1 &&
     prefix.endsWith('/') &&
     isSafePath(prefix) &&
-    !FORBIDDEN_PREFIXES.some((forbidden) => prefix.startsWith(forbidden))
+    // Express and Signal K match routes regardless of case.
+    !FORBIDDEN_PREFIXES.some((forbidden) =>
+      prefix.toLowerCase().startsWith(forbidden.toLowerCase())
+    )
   )
 }
 

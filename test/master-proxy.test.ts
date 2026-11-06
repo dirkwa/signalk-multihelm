@@ -51,6 +51,8 @@ describe('path checks', () => {
     expect(isValidPrefix('/signalk/v1/api/resources/charts')).toBe(false)
     expect(isValidPrefix('/skServer/')).toBe(false)
     expect(isValidPrefix('/admin/')).toBe(false)
+    expect(isValidPrefix('/Admin/')).toBe(false)
+    expect(isValidPrefix('/SKSERVER/')).toBe(false)
     expect(isValidPrefix('/signalk/v1/access/')).toBe(false)
     expect(isValidPrefix('/plugins/signalk-multihelm/')).toBe(false)
     expect(isValidPrefix('/')).toBe(false)
