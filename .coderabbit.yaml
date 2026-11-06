@@ -1,0 +1,57 @@
+language: en-US
+
+reviews:
+  profile: assertive
+  auto_review:
+    enabled: true
+    auto_incremental_review: true
+    drafts: false
+    # The release PR only bumps the version; dependency bumps come from
+    # Dependabot and are checked by CI.
+    ignore_title_keywords:
+      - 'chore: release'
+      - 'build(deps):'
+      - 'build(deps-dev):'
+      - 'ci(deps):'
+    ignore_usernames:
+      - 'release-please[bot]'
+      - 'dependabot[bot]'
+      - 'github-actions[bot]'
+
+  path_filters:
+    - '!**/node_modules/**'
+    - '!**/package-lock.json'
+
+  # Code explains itself; comments say why, not what. Docstrings on every
+  # function would be the echo comments AGENTS.md rules out.
+  pre_merge_checks:
+    docstrings:
+      mode: 'off'
+
+  high_level_summary_instructions: |
+    Write summaries in present tense. Describe what the code does, not
+    what it did. Skip filler like "This PR" and go straight to the change.
+
+  path_instructions:
+    - path: '**/*'
+      instructions: |
+        Multihelm keeps the Signal K servers of one boat in step and tells
+        plugins which server is the master. AGENTS.md lists the contracts
+        other software depends on (the multihelm PropertyValue, api.ts, the
+        peer routes); flag changes that break them.
+
+        One logical change per PR: the PR title becomes the release-notes
+        line, so flag a PR that would need two lines. Flag any version
+        change outside the release PR, any CHANGELOG.md (the Releases page
+        is the changelog), echo comments, and AI-attribution lines
+        ("Co-Authored-By: Claude", "Generated with ...").
+
+    - path: 'plugin/**'
+      instructions: |
+        Build output, not tracked. Flag any file a PR adds here.
+
+    - path: '.github/workflows/**'
+      instructions: |
+        npm publishing is OIDC trusted publishing bound to publish.yml.
+        Flag NPM_TOKEN or NODE_AUTH_TOKEN, and any move of the publish
+        step out of publish.yml.
