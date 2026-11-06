@@ -44,7 +44,7 @@ export class PeerHttpError extends Error {
 }
 
 function send(
-  method: 'GET' | 'POST',
+  method: 'GET' | 'POST' | 'PUT' | 'DELETE',
   url: string,
   options: { token?: string; body?: unknown; headers?: Record<string, string> } = {}
 ): Promise<RawResponse> {
@@ -60,9 +60,15 @@ function send(
   const target = new URL(url)
   const request = target.protocol === 'https:' ? https.request : http.request
   return new Promise((resolve, reject) => {
-    const req = request(target, { method, headers, timeout: REQUEST_TIMEOUT_MS }, (res) => {
-      resolve({ status: res.statusCode ?? 0, stream: res })
-    })
+    // This server itself, reached over loopback, may well have a self-signed certificate.
+    const rejectUnauthorized = target.hostname !== '127.0.0.1'
+    const req = request(
+      target,
+      { method, headers, timeout: REQUEST_TIMEOUT_MS, rejectUnauthorized },
+      (res) => {
+        resolve({ status: res.statusCode ?? 0, stream: res })
+      }
+    )
     req.on('timeout', () =>
       req.destroy(new Error(`timeout after ${String(REQUEST_TIMEOUT_MS)} ms`))
     )
@@ -118,6 +124,29 @@ export async function fetchHello(base: string, token?: string): Promise<Hello> {
       ? body.datasets.filter((d): d is string => typeof d === 'string')
       : [],
     master: (body as { master?: unknown }).master === true
+  }
+}
+
+export async function fetchVesselSettings(base: string, token: string): Promise<unknown> {
+  return getJson(`${base}${ROUTE_PREFIX}/vessel-settings`, token)
+}
+
+/** A request to a Signal K server's own REST API; throws on any status but 2xx. */
+export async function callServer(
+  method: 'GET' | 'PUT' | 'DELETE',
+  url: string,
+  token: string,
+  body?: unknown
+): Promise<unknown> {
+  const res = await send(method, url, { token, body })
+  const text = await readBody(res)
+  if (res.status < 200 || res.status >= 300) {
+    throw new PeerHttpError(res.status, `HTTP ${String(res.status)} from ${method} ${url}`)
+  }
+  try {
+    return JSON.parse(text) as unknown
+  } catch {
+    return text
   }
 }
 
@@ -188,14 +217,15 @@ export type AccessRequestResult =
   | { kind: 'denied' }
   | { kind: 'error'; message: string }
 
-/** Ask the peer for a readonly device token. */
+/** Ask the peer for a device token, readonly unless said otherwise. */
 export async function requestAccess(
   base: string,
   clientId: string,
-  description: string
+  description: string,
+  permissions: 'readonly' | 'admin' = 'readonly'
 ): Promise<AccessRequestResult> {
   const res = await send('POST', `${base}/signalk/v1/access/requests`, {
-    body: { clientId, description, permissions: 'readonly' }
+    body: { clientId, description, permissions }
   })
   const text = await readBody(res)
   if (res.status === 404) {

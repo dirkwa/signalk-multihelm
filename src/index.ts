@@ -11,9 +11,11 @@ import {
   type Role
 } from './api.js'
 import { ServerDiscovery } from './discovery.js'
-import { Multihelm } from './multihelm.js'
+import { MasterFollower } from './follow-master.js'
+import { Multihelm, ROUND_INTERVAL_MS } from './multihelm.js'
 import { registerRoutes } from './routes.js'
 import { MultihelmStore } from './store.js'
+import { vesselSettingsFromDeltas } from './vessel-settings.js'
 
 const PLUGIN_ID = 'signalk-multihelm'
 
@@ -23,8 +25,28 @@ const ConfigSchema = Type.Object({
     description:
       'Set this on one server only. Plugins that run on the master alone run here, and the other servers use them through this one.',
     default: false
+  }),
+  followVessel: Type.Boolean({
+    title: 'Take the vessel data over from the master',
+    description:
+      "Name, MMSI, call sign, dimensions and ship type from Server -> Settings. Changes made here are replaced by the master's.",
+    default: true
+  }),
+  followMetadata: Type.Boolean({
+    title: 'Take the path metadata over from the master',
+    description:
+      "Display names, units, zones and alarm limits set for paths. Changes made here are replaced by the master's.",
+    default: true
   })
 })
+
+type Config = { master?: unknown; followVessel?: unknown; followMetadata?: unknown }
+
+const APPROVE_HINT =
+  "approve Multihelm's request under Security -> Access Requests on this server to take the vessel settings over"
+
+const DENIED_HINT =
+  'the access request on this server was denied, so the vessel settings are not taken over; restart the plugin to ask again'
 
 function statusText(role: Role, master: PeerInfo | null, conflict: boolean): string {
   if (conflict) {
@@ -38,7 +60,11 @@ function statusText(role: Role, master: PeerInfo | null, conflict: boolean): str
 
 /** The parts of the server the typed API leaves out. */
 type Host = ServerAPI & {
-  config?: { getExternalPort?: () => number }
+  config?: {
+    getExternalPort?: () => number
+    baseDeltaEditor?: { deltas?: unknown }
+    settings?: { ssl?: boolean; port?: number; sslport?: number }
+  }
 }
 
 export default function (app: ServerAPI): Plugin {
@@ -46,6 +72,21 @@ export default function (app: ServerAPI): Plugin {
   let multihelm: Multihelm | null = null
   let discovery: ServerDiscovery | null = null
   let stopRoleStatus: (() => void) | null = null
+  let stopFollowing: (() => void) | null = null
+
+  function localVesselSettings(): ReturnType<typeof vesselSettingsFromDeltas> | null {
+    const deltas = host.config?.baseDeltaEditor?.deltas
+    return deltas === undefined ? null : vesselSettingsFromDeltas(deltas)
+  }
+
+  /** The port this server listens on, as the server itself works it out. */
+  function ownUrl(): string {
+    const settings = host.config?.settings
+    if (settings?.ssl) {
+      return `https://127.0.0.1:${String(Number(process.env.SSLPORT) || settings.sslport || 3443)}`
+    }
+    return `http://127.0.0.1:${String(Number(process.env.PORT) || settings?.port || 3000)}`
+  }
 
   function publish(value: MultihelmProperty): void {
     app.emitPropertyValue(PROPERTY_NAME, value)
@@ -60,8 +101,10 @@ export default function (app: ServerAPI): Plugin {
 
     start(config: object) {
       // Schema defaults are not applied at runtime: a never configured plugin gets {}.
-      const isMaster = (config as { master?: unknown }).master === true
-      const mh = new Multihelm(new MultihelmStore(app.getDataDirPath()), {
+      const settings = config as Config
+      const isMaster = settings.master === true
+      const store = new MultihelmStore(app.getDataDirPath())
+      const mh = new Multihelm(store, {
         serverName: () => os.hostname(),
         isMaster: () => isMaster,
         debug: (msg) => {
@@ -84,14 +127,62 @@ export default function (app: ServerAPI): Plugin {
         master: () => mh.master(),
         onRoleChanged: (cb) => mh.onRoleChanged(cb)
       })
+      const follower = new MasterFollower({
+        store,
+        serverId: mh.serverId,
+        ownUrl,
+        localSettings: localVesselSettings,
+        master: () => mh.masterAccess(),
+        followVessel: settings.followVessel !== false,
+        followMeta: settings.followMetadata !== false,
+        debug: (msg) => {
+          app.debug(msg)
+        },
+        error: (msg) => {
+          app.error(msg)
+        }
+      })
       const showRole = (): void => {
-        app.setPluginStatus(statusText(mh.role(), mh.master(), mh.masterConflict()))
+        const text = statusText(mh.role(), mh.master(), mh.masterConflict())
+        if (follower.waitingForApproval()) {
+          app.setPluginStatus(`${text}; ${APPROVE_HINT}`)
+        } else if (follower.denied()) {
+          app.setPluginStatus(`${text}; ${DENIED_HINT}`)
+        } else {
+          app.setPluginStatus(text)
+        }
+      }
+      let following = false
+      const follow = (): void => {
+        if (following) {
+          return
+        }
+        following = true
+        void follower
+          .run()
+          .catch((error: unknown) => {
+            app.error(
+              `Multihelm: taking over the master's vessel settings: ${error instanceof Error ? error.message : String(error)}`
+            )
+          })
+          .finally(() => {
+            following = false
+            showRole()
+          })
+      }
+      const followTimer = setInterval(follow, ROUND_INTERVAL_MS)
+      const stopRoleFollow = mh.onRoleChanged(follow)
+      stopFollowing = () => {
+        clearInterval(followTimer)
+        stopRoleFollow()
       }
       stopRoleStatus = mh.onStatusChanged(showRole)
       showRole()
     },
 
     stop() {
+      stopFollowing?.()
+      stopFollowing = null
       stopRoleStatus?.()
       stopRoleStatus = null
       if (multihelm) {
@@ -107,7 +198,8 @@ export default function (app: ServerAPI): Plugin {
       registerRoutes(
         router,
         () => multihelm,
-        () => discovery?.list() ?? []
+        () => discovery?.list() ?? [],
+        localVesselSettings
       )
     }
   }

@@ -21,12 +21,18 @@ sets by hand on one server (see `README.md`).
 - `routes.ts` — readonly `hello`/`manifest`/`file` via `router.access`;
   admin `status`, `peers`, `run`.
 - `discovery.ts` — mDNS browse for `_signalk-http(s)._tcp`.
+- `vessel-settings.ts` — the vessel data and path metadata the user set,
+  read from the server's base deltas (`app.config.baseDeltaEditor`).
+- `follow-master.ts` — `MasterFollower`: on a member, takes those over from
+  the master and writes what differs through this server's own REST API
+  (`/skServer/vessel`, meta PUT/DELETE) with an admin device token on itself.
 
 ## Contracts other software depends on
 
 - **The `multihelm` PropertyValue and `api.ts` types.** Consumers act on the
   last value; `{ apiVersion: 1 }` without methods means stopped.
-- **Peer routes and their JSON** (`hello`, `manifest`, `file`) between
+- **Peer routes and their JSON** (`hello`, `manifest`, `file`,
+  `vessel-settings`) between
   servers that may run different Multihelm versions: grow by addition and
   bump `PROTOCOL` only for a breaking change.
 - **The master** is the server set to be it with the smallest server id,

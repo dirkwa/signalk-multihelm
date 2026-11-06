@@ -299,6 +299,12 @@ export class Multihelm {
     return peer ? this.infoOf(peer) : null
   }
 
+  /** Where to reach the master, with the pairing token; null when this server is it or there is none. */
+  masterAccess(): { url: string; token: string } | null {
+    const peer = this.masterCandidates()[0]?.peer
+    return peer ? { url: peer.url, token: peer.token } : null
+  }
+
   /** More than one server is set to be the master: the user should set one only. */
   masterConflict(): boolean {
     return this.masterCandidates().length > 1
