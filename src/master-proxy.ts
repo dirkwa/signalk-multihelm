@@ -152,6 +152,9 @@ export class MasterProxy {
         answer.statusCode ?? 502,
         headersFrom(answer.headers, FORWARDED_RESPONSE_HEADERS)
       )
+      answer.on('error', (error) => {
+        res.destroy(error)
+      })
       answer.pipe(res)
     })
     upstream.on('error', (error) => {

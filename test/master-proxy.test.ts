@@ -130,6 +130,28 @@ describe('MasterProxy', () => {
     expect(seen).toHaveLength(0)
   })
 
+  it('survives a master that drops the connection in the middle of an answer', async () => {
+    const dropping = await listen((_req, res) => {
+      res.writeHead(200, { 'Content-Type': 'image/png', 'Content-Length': '100' })
+      res.write(Buffer.from('part'), () => {
+        res.socket?.destroy()
+      })
+    })
+    proxy.register('/signalk/v1/api/resources/charts/')
+    access = { url: base(dropping), token: '' }
+
+    await expect(
+      fetch(`${base(front)}/master/signalk/v1/api/resources/charts/c1/1/1/1`).then((r) =>
+        r.arrayBuffer()
+      )
+    ).rejects.toThrow()
+    access = { url: base(master), token: '' }
+    const after = await fetch(`${base(front)}/master/signalk/v1/api/resources/charts/c1/1/1/1`)
+    await close(dropping)
+
+    expect(after.status).toBe(200)
+  })
+
   it('answers 503 while no other server is the master', async () => {
     proxy.register('/signalk/v1/api/resources/charts/')
     access = null
