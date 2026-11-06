@@ -45,6 +45,9 @@ type Config = { master?: unknown; followVessel?: unknown; followMetadata?: unkno
 const APPROVE_HINT =
   "approve Multihelm's request under Security -> Access Requests on this server to take the vessel settings over"
 
+const DENIED_HINT =
+  'the access request on this server was denied, so the vessel settings are not taken over; restart the plugin to ask again'
+
 function statusText(role: Role, master: PeerInfo | null, conflict: boolean): string {
   if (conflict) {
     return `${role === 'master' ? 'Master' : `Member, master: ${master?.name ?? '?'}`}. More than one server is set to be the master: set one only`
@@ -141,7 +144,13 @@ export default function (app: ServerAPI): Plugin {
       })
       const showRole = (): void => {
         const text = statusText(mh.role(), mh.master(), mh.masterConflict())
-        app.setPluginStatus(follower.waitingForApproval() ? `${text}; ${APPROVE_HINT}` : text)
+        if (follower.waitingForApproval()) {
+          app.setPluginStatus(`${text}; ${APPROVE_HINT}`)
+        } else if (follower.denied()) {
+          app.setPluginStatus(`${text}; ${DENIED_HINT}`)
+        } else {
+          app.setPluginStatus(text)
+        }
       }
       let following = false
       const follow = (): void => {
@@ -149,10 +158,17 @@ export default function (app: ServerAPI): Plugin {
           return
         }
         following = true
-        void follower.run().finally(() => {
-          following = false
-          showRole()
-        })
+        void follower
+          .run()
+          .catch((error: unknown) => {
+            app.error(
+              `Multihelm: taking over the master's vessel settings: ${error instanceof Error ? error.message : String(error)}`
+            )
+          })
+          .finally(() => {
+            following = false
+            showRole()
+          })
       }
       const followTimer = setInterval(follow, ROUND_INTERVAL_MS)
       const stopRoleFollow = mh.onRoleChanged(follow)

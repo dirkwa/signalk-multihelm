@@ -38,6 +38,11 @@ export interface VesselSettings {
 
 const SELF = 'vessels.self'
 
+/** A path whose metadata can be read and written: dot-separated segments, none empty. */
+export function isMetaPath(path: string): boolean {
+  return /^[A-Za-z0-9_:-]+(\.[A-Za-z0-9_:-]+)*$/.test(path)
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
@@ -101,7 +106,9 @@ export function vesselSettingsFromDeltas(deltas: unknown): VesselSettings {
           }
         }
         for (const { path, value } of pathValues(update.meta)) {
-          meta[path] = value
+          if (isMetaPath(path)) {
+            meta[path] = value
+          }
         }
       }
     }
@@ -130,7 +137,7 @@ export function parseVesselSettings(raw: unknown): VesselSettings | null {
   }
   const meta: Record<string, unknown> = {}
   for (const [path, value] of Object.entries(raw.meta)) {
-    if (/^[A-Za-z0-9_]+(\.[A-Za-z0-9_]+)*$/.test(path) && isRecord(value)) {
+    if (isMetaPath(path) && isRecord(value)) {
       meta[path] = value
     }
   }

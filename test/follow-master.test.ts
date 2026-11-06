@@ -179,6 +179,21 @@ describe('MasterFollower', () => {
     security = false
   })
 
+  it('encodes the path segments of a metadata write', async () => {
+    calls.length = 0
+    local = {
+      vessel: structuredClone(masterSettings.vessel),
+      meta: {
+        ...structuredClone(masterSettings.meta),
+        'electrical.batteries.house:bank.voltage': { units: 'V' }
+      }
+    }
+    await follower('encoded').run()
+    expect(calls.filter((c) => c.method === 'DELETE').map((c) => c.url)).toEqual([
+      '/signalk/v1/api/vessels/self/electrical/batteries/house%3Abank/voltage/meta'
+    ])
+  })
+
   it('does nothing without a master', async () => {
     calls.length = 0
     await follower('alone', { master: () => null }).run()

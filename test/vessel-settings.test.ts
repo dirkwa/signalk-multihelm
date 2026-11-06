@@ -50,6 +50,13 @@ describe('vesselSettingsFromDeltas', () => {
     })
   })
 
+  it('leaves out metadata under a path that cannot be written', () => {
+    const deltas = [
+      { context: 'vessels.self', updates: [{ meta: [{ path: '', value: { units: 'm' } }] }] }
+    ]
+    expect(vesselSettingsFromDeltas(deltas).meta).toEqual({})
+  })
+
   it('skips what is not a delta', () => {
     expect(vesselSettingsFromDeltas([null, 3, { context: 'vessels.self', updates: [7] }])).toEqual({
       vessel: {},
@@ -64,9 +71,18 @@ describe('parseVesselSettings', () => {
     expect(
       parseVesselSettings({
         vessel: { name: 'Pelican', beam: 4.4, length: 'long', extra: 1 },
-        meta: { 'a.b': { units: 'm' }, '../x': { units: 'm' }, 'c.d': 5 }
+        meta: {
+          'a.b': { units: 'm' },
+          'electrical.batteries.house-bank.voltage': { units: 'V' },
+          '../x': { units: 'm' },
+          '': { units: 'm' },
+          'c.d': 5
+        }
       })
-    ).toEqual({ vessel: { name: 'Pelican', beam: 4.4 }, meta: { 'a.b': { units: 'm' } } })
+    ).toEqual({
+      vessel: { name: 'Pelican', beam: 4.4 },
+      meta: { 'a.b': { units: 'm' }, 'electrical.batteries.house-bank.voltage': { units: 'V' } }
+    })
     expect(parseVesselSettings({ vessel: {} })).toBeNull()
   })
 })

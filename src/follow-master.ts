@@ -45,7 +45,8 @@ function errorText(error: unknown): string {
 }
 
 function metaUrl(base: string, path: string): string {
-  return `${base}/signalk/v1/api/vessels/self/${path.split('.').join('/')}/meta`
+  const segments = path.split('.').map((s) => encodeURIComponent(s))
+  return `${base}/signalk/v1/api/vessels/self/${segments.join('/')}/meta`
 }
 
 export class MasterFollower {
