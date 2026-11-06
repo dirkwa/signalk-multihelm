@@ -38,6 +38,20 @@ export type Peer = Static<typeof PeerSchema>
 
 const PeersFileSchema = Type.Array(PeerSchema)
 
+/** This server's admin device token on itself, for writing what follows the master. */
+export const OwnAccessSchema = Type.Object({
+  token: Type.String(),
+  requestHref: Type.Optional(Type.String()),
+  state: Type.Union([
+    Type.Literal('none'),
+    Type.Literal('waiting-approval'),
+    Type.Literal('granted'),
+    Type.Literal('denied')
+  ])
+})
+
+export type OwnAccess = Static<typeof OwnAccessSchema>
+
 const LibraryFileSchema = Type.Object({
   seq: Type.Integer({ minimum: 0 }),
   entries: Type.Record(Type.String(), Type.Any())
@@ -90,6 +104,15 @@ export class MultihelmStore {
 
   savePeers(peers: readonly Peer[]): void {
     writeAtomic(path.join(this.dir, 'peers.json'), JSON.stringify(peers, null, 2), 0o600)
+  }
+
+  loadOwnAccess(): OwnAccess {
+    const raw = readJson(path.join(this.dir, 'own-access.json'))
+    return Value.Check(OwnAccessSchema, raw) ? raw : { token: '', state: 'none' }
+  }
+
+  saveOwnAccess(access: OwnAccess): void {
+    writeAtomic(path.join(this.dir, 'own-access.json'), JSON.stringify(access), 0o600)
   }
 
   /** A random id made once per installation: every server of a boat shares its vessel id. */

@@ -36,6 +36,22 @@ minutes no longer counts.
 When several servers are set, the one with the smallest server id is the
 master, and the plugin status says to set one only.
 
+## Vessel data and metadata from the master
+
+The vessel is described once, on the master. The other servers take over its
+vessel data from **Server -> Settings** (name, MMSI, call sign, length, beam,
+draft, air height, ship type) and the metadata set for paths (display names,
+units, zones, alarm limits), and follow every change once a minute. A change
+made on another server is replaced by the master's. GPS antenna positions
+stay with each server. Each of the two can be turned off per server in the
+plugin settings.
+
+To write them so they survive a restart, Multihelm asks its own server once
+for admin access: approve it under **Security -> Access Requests** on each
+server that is not the master (the plugin status says so while it waits). A
+server without security needs nothing. A new MMSI takes effect on that server
+at its next restart, as when it is changed by hand.
+
 ## How replication works
 
 - Each entry of a dataset carries a counter and the server that last changed
