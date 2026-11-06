@@ -79,13 +79,31 @@ export interface PeerInfo {
   lastSeen?: number
   lastSync?: number
   lastError?: string
+  /** The peer is set to be the boat's master, and answered within the last rounds. */
+  master?: boolean
 }
+
+/**
+ * `master`: this server is the boat's master. `member`: another server is,
+ * or none is. The master is set by hand on one server; when several are set,
+ * the one with the smallest server id is the master.
+ */
+export type Role = 'master' | 'member'
 
 export interface MultihelmApi {
   registerDataset: (definition: DatasetDefinition) => DatasetHandle
   peers: () => PeerInfo[]
   /** This server's id among the boat's servers. */
   serverId: () => string
+  role: () => Role
+  /** The peer that is the master; null when this server is the master or there is none. */
+  master: () => PeerInfo | null
+  /**
+   * Calls `cb` whenever this server's role or the master changes; returns a
+   * function that stops the calls. A master-mode plugin starts its work when
+   * its server becomes the master and stops it when it no longer is.
+   */
+  onRoleChanged: (cb: (role: Role, master: PeerInfo | null) => void) => () => void
 }
 
 export type MultihelmProperty = { apiVersion: typeof API_VERSION } & Partial<MultihelmApi>

@@ -92,6 +92,7 @@ const root = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'multihelm-')), '.s
 function quiet(): MultihelmHost {
   return {
     serverName: () => 'quiet',
+    isMaster: () => false,
     debug: (m: string) => {
       if (process.env.MHDEBUG) console.log(m)
     },
@@ -106,12 +107,13 @@ async function listen(app: http.RequestListener): Promise<{ server: http.Server;
   return { server, url: `http://127.0.0.1:${String(port)}` }
 }
 
-async function station(name: string): Promise<Station> {
+async function station(name: string, master: () => boolean = () => false): Promise<Station> {
   const dir = path.join(root, name, 'folder')
   fs.mkdirSync(dir, { recursive: true })
   const mh = new Multihelm(new MultihelmStore(path.join(root, name, 'data')), {
     ...quiet(),
-    serverName: () => name
+    serverName: () => name,
+    isMaster: master
   })
   const dataset = new FolderDataset(dir)
   const handle = mh.registerDataset(dataset)
@@ -261,6 +263,115 @@ describe('two servers', () => {
     expect(a.mh.hello().datasets).toEqual([])
     const res = await fetch(`${a.url}${ROUTE_PREFIX}/manifest?dataset=${DATASET}&since=0`)
     expect(res.status).toBe(404)
+  })
+})
+
+describe('the master role', () => {
+  const stations: Station[] = []
+
+  afterAll(() => {
+    for (const s of stations) {
+      s.server.close()
+    }
+  })
+
+  async function make(name: string, master: boolean | (() => boolean)): Promise<Station> {
+    const s = await station(name, typeof master === 'function' ? master : () => master)
+    stations.push(s)
+    return s
+  }
+
+  it('is the server set to be the master, and the others learn it', async () => {
+    const master = await make('role-salon', true)
+    const member = await make('role-port', false)
+    const seen: (string | null)[] = []
+    member.mh.onRoleChanged((role, m) => {
+      seen.push(`${role}:${m?.name ?? ''}`)
+    })
+    expect(master.mh.role()).toBe('master')
+    expect(master.mh.master()).toBeNull()
+    expect(member.mh.role()).toBe('member')
+    expect(member.mh.master()).toBeNull()
+
+    await member.mh.pair(master.url)
+    await member.mh.runRound()
+    expect(member.mh.role()).toBe('member')
+    expect(member.mh.master()).toMatchObject({ name: 'role-salon', master: true })
+    expect(seen).toEqual(['member:role-salon'])
+
+    await member.mh.runRound()
+    expect(seen).toHaveLength(1)
+
+    await member.mh.unpair(master.url)
+    expect(member.mh.master()).toBeNull()
+    expect(seen).toEqual(['member:role-salon', 'member:'])
+  })
+
+  it('goes to the smallest server id when several are set to be the master', async () => {
+    const x = await make('role-x', true)
+    const y = await make('role-y', true)
+    await x.mh.pair(y.url)
+    await y.mh.pair(x.url)
+    await x.mh.runRound()
+    await y.mh.runRound()
+    const [first, second] = [x, y].sort((p, q) => (p.mh.serverId < q.mh.serverId ? -1 : 1))
+    expect(first?.mh.role()).toBe('master')
+    expect(second?.mh.role()).toBe('member')
+    expect(second?.mh.master()?.id).toBe(first?.mh.serverId)
+    expect(x.mh.masterConflict()).toBe(true)
+    expect(y.mh.masterConflict()).toBe(true)
+  })
+
+  it('learns the master while a round is still busy', async () => {
+    let isMaster = false
+    const master = await make('role-busy-salon', () => isMaster)
+    const member = await make('role-busy-port', false)
+    await member.mh.pair(master.url)
+    isMaster = true
+
+    let release: () => void = () => undefined
+    const blocked = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    const list = member.dataset.list
+    member.dataset.list = async () => {
+      await blocked
+      return list()
+    }
+    const round = member.mh.runRound()
+    await member.mh.checkMasters()
+    expect(member.mh.master()).toMatchObject({ name: 'role-busy-salon' })
+    release()
+    await round
+    member.dataset.list = list
+  })
+
+  it('tells status listeners when a conflict ends, though the role stays', async () => {
+    const set = new Map<string, boolean>([
+      ['role-c-x', true],
+      ['role-c-y', true]
+    ])
+    const x = await make('role-c-x', () => set.get('role-c-x') === true)
+    const y = await make('role-c-y', () => set.get('role-c-y') === true)
+    await x.mh.pair(y.url)
+    await y.mh.pair(x.url)
+    await x.mh.runRound()
+    await y.mh.runRound()
+    const larger = x.mh.serverId > y.mh.serverId ? x : y
+    const smaller = larger === x ? y : x
+    const roles: string[] = []
+    const statuses: boolean[] = []
+    smaller.mh.onRoleChanged((role) => {
+      roles.push(role)
+    })
+    smaller.mh.onStatusChanged(() => {
+      statuses.push(smaller.mh.masterConflict())
+    })
+    set.set(larger === x ? 'role-c-x' : 'role-c-y', false)
+    await smaller.mh.checkMasters()
+    expect(smaller.mh.role()).toBe('master')
+    expect(roles).toEqual([])
+    expect(statuses).toEqual([false])
   })
 })
 

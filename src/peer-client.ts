@@ -20,6 +20,8 @@ export interface Hello {
   name: string
   protocol: number
   datasets: string[]
+  /** This server is set to be the boat's master. */
+  master: boolean
 }
 
 export interface Manifest {
@@ -114,7 +116,8 @@ export async function fetchHello(base: string, token?: string): Promise<Hello> {
     protocol: body.protocol,
     datasets: Array.isArray(body.datasets)
       ? body.datasets.filter((d): d is string => typeof d === 'string')
-      : []
+      : [],
+    master: (body as { master?: unknown }).master === true
   }
 }
 

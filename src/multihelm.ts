@@ -4,7 +4,7 @@
  * Every server keeps a full copy of each registered dataset. Each round it
  * lists its own datasets, then asks every paired peer for the entries that
  * changed there and takes over those whose version wins over its own (see
- * `library.ts`). There is no master: any server may change or delete an
+ * `library.ts`). Replication has no master: any server may change or delete an
  * entry and the others follow, also a server that was off at the time.
  *
  * All work is serialized: a round, a pairing step and a registration never
@@ -21,7 +21,8 @@ import type {
   DatasetEntry,
   DatasetHandle,
   IncomingEntry,
-  PeerInfo
+  PeerInfo,
+  Role
 } from './api.js'
 import {
   applyListing,
@@ -48,11 +49,23 @@ import type { MultihelmStore, Peer } from './store.js'
 
 export const PROTOCOL = 1
 export const ROUND_INTERVAL_MS = 60_000
+/**
+ * Paired peers are asked whether they are set to be the master this often,
+ * on a timer of its own, so a long round of transfers does not hold it up.
+ */
+export const MASTER_CHECK_INTERVAL_MS = 30_000
+/**
+ * A peer set to be the master counts as the master while it answered this
+ * recently, so a few missed answers do not move the role.
+ */
+export const MASTER_STALE_MS = 5 * MASTER_CHECK_INTERVAL_MS
 /** Free space kept beyond an incoming file, as a fraction of its size. */
 const FREE_SPACE_MARGIN = 0.05
 
 export interface MultihelmHost {
   serverName: () => string
+  /** The user set this server to be the boat's master. */
+  isMaster: () => boolean
   debug: (msg: string) => void
   error: (msg: string) => void
 }
@@ -92,6 +105,16 @@ export class Multihelm {
   private started = false
   /** Set by stop: work under way ends at the next step. */
   private stopped = false
+  /** Peer URL → when it last answered as set to be the master. */
+  private readonly masterSeen = new Map<string, number>()
+  private readonly roleListeners = new Set<(role: Role, master: PeerInfo | null) => void>()
+  private readonly statusListeners = new Set<() => void>()
+  /** What the role listeners were last told: role and master id. */
+  private announcedRole = ''
+  /** What the status listeners were last told: role, master id and conflict. */
+  private announcedStatus = ''
+  private masterTimer: NodeJS.Timeout | null = null
+  private checkingMasters = false
   readonly serverId: string
 
   constructor(
@@ -113,6 +136,9 @@ export class Multihelm {
       })
     }
     this.timer = setTimeout(tick, 0)
+    this.masterTimer = setInterval(() => {
+      void this.checkMasters()
+    }, MASTER_CHECK_INTERVAL_MS)
   }
 
   stop(): void {
@@ -125,6 +151,51 @@ export class Multihelm {
     }
     this.timer = null
     this.soon = null
+    if (this.masterTimer) {
+      clearInterval(this.masterTimer)
+      this.masterTimer = null
+    }
+  }
+
+  /**
+   * Asks every paired peer whether it is set to be the master. Runs outside
+   * the work queue and touches nothing but `masterSeen`, so it neither waits
+   * for a round nor races one.
+   */
+  async checkMasters(): Promise<void> {
+    if (this.checkingMasters || this.stopped) {
+      return
+    }
+    this.checkingMasters = true
+    try {
+      await Promise.all(
+        this.peers
+          .filter((p) => p.state === 'paired' && p.id !== '')
+          .map(async (peer) => {
+            let hello
+            try {
+              hello = await fetchHello(peer.url, peer.token)
+            } catch {
+              return // It counts until its last answer is stale.
+            }
+            // Unpaired or stopped meanwhile, or another server at that address now.
+            if (this.stopped || !this.peers.includes(peer) || hello.serverId !== peer.id) {
+              return
+            }
+            if (hello.master) {
+              this.masterSeen.set(peer.url, Date.now())
+            } else {
+              this.masterSeen.delete(peer.url)
+            }
+          })
+      )
+    } finally {
+      this.checkingMasters = false
+    }
+    // stop() may have run during the awaits above.
+    if (!(this.stopped as boolean)) {
+      this.announceRole()
+    }
   }
 
   /** Run `task` after every task queued before it. */
@@ -185,11 +256,94 @@ export class Multihelm {
         }
         await this.pollPairingLocked(peer)
         if (peer.state === 'paired') {
+          await this.helloLocked(peer)
+        }
+        if (peer.state === 'paired') {
           await this.syncPeerLocked(peer)
         }
       }
       this.store.savePeers(this.peers)
+      this.announceRole()
     })
+  }
+
+  // --- master role ----------------------------------------------------
+
+  /** The servers set to be the master that count now, this one included, smallest id first. */
+  private masterCandidates(): { id: string; peer: Peer | null }[] {
+    const now = Date.now()
+    const candidates: { id: string; peer: Peer | null }[] = []
+    if (this.host.isMaster()) {
+      candidates.push({ id: this.serverId, peer: null })
+    }
+    for (const peer of this.peers) {
+      const seen = this.masterSeen.get(peer.url)
+      if (
+        peer.state === 'paired' &&
+        peer.id !== '' &&
+        seen !== undefined &&
+        now - seen <= MASTER_STALE_MS
+      ) {
+        candidates.push({ id: peer.id, peer })
+      }
+    }
+    return candidates.sort((x, y) => (x.id < y.id ? -1 : x.id > y.id ? 1 : 0))
+  }
+
+  role(): Role {
+    return this.masterCandidates()[0]?.peer === null ? 'master' : 'member'
+  }
+
+  master(): PeerInfo | null {
+    const peer = this.masterCandidates()[0]?.peer
+    return peer ? this.infoOf(peer) : null
+  }
+
+  /** More than one server is set to be the master: the user should set one only. */
+  masterConflict(): boolean {
+    return this.masterCandidates().length > 1
+  }
+
+  /** Calls `cb` whenever the role, the master or `masterConflict()` changes. */
+  onStatusChanged(cb: () => void): () => void {
+    this.statusListeners.add(cb)
+    return () => {
+      this.statusListeners.delete(cb)
+    }
+  }
+
+  onRoleChanged(cb: (role: Role, master: PeerInfo | null) => void): () => void {
+    this.roleListeners.add(cb)
+    return () => {
+      this.roleListeners.delete(cb)
+    }
+  }
+
+  private announceRole(): void {
+    const role = this.role()
+    const master = this.master()
+    const now = `${role}:${master?.id ?? ''}`
+    const status = `${now}:${String(this.masterConflict())}`
+    if (now !== this.announcedRole) {
+      this.announcedRole = now
+      for (const cb of this.roleListeners) {
+        try {
+          cb(role, master)
+        } catch (error) {
+          this.host.error(`Multihelm: a role listener failed: ${errorText(error)}`)
+        }
+      }
+    }
+    if (status !== this.announcedStatus) {
+      this.announcedStatus = status
+      for (const cb of this.statusListeners) {
+        try {
+          cb()
+        } catch (error) {
+          this.host.error(`Multihelm: a status listener failed: ${errorText(error)}`)
+        }
+      }
+    }
   }
 
   private async listLocked(dataset: Dataset): Promise<void> {
@@ -240,7 +394,8 @@ export class Multihelm {
       serverId: this.serverId,
       name: this.host.serverName(),
       protocol: PROTOCOL,
-      datasets: this.datasetIds()
+      datasets: this.datasetIds(),
+      master: this.host.isMaster()
     }
   }
 
@@ -455,19 +610,25 @@ export class Multihelm {
   // --- peers ----------------------------------------------------------
 
   peerInfo(): PeerInfo[] {
-    return this.peers.map((p) => {
-      const info: PeerInfo = { id: p.id, name: p.name, url: p.url, state: p.state }
-      if (p.lastSeen !== undefined) {
-        info.lastSeen = p.lastSeen
-      }
-      if (p.lastSync !== undefined) {
-        info.lastSync = p.lastSync
-      }
-      if (p.lastError !== undefined) {
-        info.lastError = p.lastError
-      }
-      return info
-    })
+    return this.peers.map((p) => this.infoOf(p))
+  }
+
+  private infoOf(p: Peer): PeerInfo {
+    const info: PeerInfo = { id: p.id, name: p.name, url: p.url, state: p.state }
+    if (p.lastSeen !== undefined) {
+      info.lastSeen = p.lastSeen
+    }
+    if (p.lastSync !== undefined) {
+      info.lastSync = p.lastSync
+    }
+    if (p.lastError !== undefined) {
+      info.lastError = p.lastError
+    }
+    const seen = this.masterSeen.get(p.url)
+    if (seen !== undefined && Date.now() - seen <= MASTER_STALE_MS) {
+      info.master = true
+    }
+    return info
   }
 
   /**
@@ -510,7 +671,9 @@ export class Multihelm {
     return this.serialize(() => {
       const before = this.peers.length
       this.peers = this.peers.filter((p) => p.url !== url)
+      this.masterSeen.delete(url)
       this.store.savePeers(this.peers)
+      this.announceRole()
       return Promise.resolve(this.peers.length !== before)
     })
   }
@@ -570,6 +733,11 @@ export class Multihelm {
       peer.id = hello.serverId
       peer.name = hello.name
       peer.lastSeen = Date.now()
+      if (hello.master) {
+        this.masterSeen.set(peer.url, peer.lastSeen)
+      } else {
+        this.masterSeen.delete(peer.url)
+      }
     } catch (error) {
       peer.lastError =
         error instanceof PeerHttpError && error.status === 404

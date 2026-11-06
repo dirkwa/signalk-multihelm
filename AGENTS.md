@@ -1,8 +1,9 @@
 # Signal K Multihelm
 
 Signal K server plugin that keeps the servers of one boat in step: it finds
-and pairs them, and replicates the datasets other plugins register, with no
-master (see `README.md`).
+and pairs them, replicates the datasets other plugins register (with no
+master), and tells plugins which server is the boat's master, which the user
+sets by hand on one server (see `README.md`).
 
 ## Module map (`src/`)
 
@@ -28,12 +29,16 @@ master (see `README.md`).
 - **Peer routes and their JSON** (`hello`, `manifest`, `file`) between
   servers that may run different Multihelm versions: grow by addition and
   bump `PROTOCOL` only for a breaking change.
+- **The master** is the server set to be it with the smallest server id,
+  among this one and the paired peers whose `hello` said `master: true`
+  within `MASTER_STALE_MS`. Every server must reach the same answer.
 - **A file is served only if its dataset lists it**, and only while it still
   has the size and time that were hashed.
 
 ## Gotchas
 
-- **Schema defaults are not applied at runtime**; there is no configuration.
+- **Schema defaults are not applied at runtime**: `start()` gets `{}` for a
+  plugin never configured, so `master` counts only when it is `true`.
 - **No install scripts.** Runtime dependencies stay pure JS (`typebox`,
   `multicast-dns`).
 - **ESM.** Relative imports carry the `.js` extension; the entry is

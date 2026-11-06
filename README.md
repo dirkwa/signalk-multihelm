@@ -22,6 +22,20 @@ every plugin that uses Multihelm shares that pairing.
 Needs Signal K server 2.31 or later: peers read the replication routes with a
 readonly device token.
 
+Multihelm is enabled when it is installed.
+
+## The master
+
+Set **This server is the boat's master** in the plugin settings of one
+server. Plugins that work on one server only (a weather router, rules,
+alarms to NMEA 2000) run on the master, and the other servers use them
+through it; replicated datasets do not need a master. Every server asks its
+paired peers every 30 seconds whether they are set to be the master, apart
+from the transfers, and a master that has not answered for two and a half
+minutes no longer counts.
+When several servers are set, the one with the smallest server id is the
+master, and the plugin status says to set one only.
+
 ## How replication works
 
 - Each entry of a dataset carries a counter and the server that last changed
@@ -38,10 +52,12 @@ readonly device token.
 ## For plugin authors
 
 Multihelm publishes its API as the PropertyValue `multihelm`:
-`{ apiVersion: 1, registerDataset, peers, serverId }` from its start, and
+`{ apiVersion: 1, registerDataset, peers, serverId, role, master, onRoleChanged }`
+from its start, and
 `{ apiVersion: 1 }` after its stop. Follow the last value, register your
 datasets whenever the methods appear, and unregister in your own `stop()`.
-The types are in [`src/api.ts`](src/api.ts).
+The types are in [`src/api.ts`](src/api.ts). A plugin that runs on the master
+only starts its work when `role()` is `'master'` and follows `onRoleChanged`.
 
 ```ts
 app.onPropertyValues('multihelm', (values) => {

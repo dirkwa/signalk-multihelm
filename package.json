@@ -25,6 +25,7 @@
   "signalk": {
     "displayName": "Multihelm"
   },
+  "signalk-plugin-enabled-by-default": true,
   "files": [
     "plugin/**/*"
   ],

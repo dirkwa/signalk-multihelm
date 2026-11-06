@@ -112,6 +112,9 @@ export function registerRoutes(
       available,
       running: mh !== null,
       serverId: mh?.serverId ?? null,
+      role: mh?.role() ?? null,
+      master: mh?.master() ?? null,
+      masterConflict: mh?.masterConflict() ?? false,
       datasets: mh?.datasetIds() ?? [],
       peers: mh?.peerInfo() ?? [],
       discovered: mh ? discovered() : []
