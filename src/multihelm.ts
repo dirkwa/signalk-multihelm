@@ -50,10 +50,15 @@ import type { MultihelmStore, Peer } from './store.js'
 export const PROTOCOL = 1
 export const ROUND_INTERVAL_MS = 60_000
 /**
- * A peer set to be the master counts as the master while it answered this
- * recently, so one missed round does not move the role.
+ * Paired peers are asked whether they are set to be the master this often,
+ * on a timer of its own, so a long round of transfers does not hold it up.
  */
-export const MASTER_STALE_MS = 2.5 * ROUND_INTERVAL_MS
+export const MASTER_CHECK_INTERVAL_MS = 30_000
+/**
+ * A peer set to be the master counts as the master while it answered this
+ * recently, so a few missed answers do not move the role.
+ */
+export const MASTER_STALE_MS = 5 * MASTER_CHECK_INTERVAL_MS
 /** Free space kept beyond an incoming file, as a fraction of its size. */
 const FREE_SPACE_MARGIN = 0.05
 
@@ -103,8 +108,13 @@ export class Multihelm {
   /** Peer URL → when it last answered as set to be the master. */
   private readonly masterSeen = new Map<string, number>()
   private readonly roleListeners = new Set<(role: Role, master: PeerInfo | null) => void>()
-  /** What the listeners were last told: role and master id. */
+  private readonly statusListeners = new Set<() => void>()
+  /** What the role listeners were last told: role and master id. */
   private announcedRole = ''
+  /** What the status listeners were last told: role, master id and conflict. */
+  private announcedStatus = ''
+  private masterTimer: NodeJS.Timeout | null = null
+  private checkingMasters = false
   readonly serverId: string
 
   constructor(
@@ -126,6 +136,9 @@ export class Multihelm {
       })
     }
     this.timer = setTimeout(tick, 0)
+    this.masterTimer = setInterval(() => {
+      void this.checkMasters()
+    }, MASTER_CHECK_INTERVAL_MS)
   }
 
   stop(): void {
@@ -138,6 +151,51 @@ export class Multihelm {
     }
     this.timer = null
     this.soon = null
+    if (this.masterTimer) {
+      clearInterval(this.masterTimer)
+      this.masterTimer = null
+    }
+  }
+
+  /**
+   * Asks every paired peer whether it is set to be the master. Runs outside
+   * the work queue and touches nothing but `masterSeen`, so it neither waits
+   * for a round nor races one.
+   */
+  async checkMasters(): Promise<void> {
+    if (this.checkingMasters || this.stopped) {
+      return
+    }
+    this.checkingMasters = true
+    try {
+      await Promise.all(
+        this.peers
+          .filter((p) => p.state === 'paired' && p.id !== '')
+          .map(async (peer) => {
+            let hello
+            try {
+              hello = await fetchHello(peer.url, peer.token)
+            } catch {
+              return // It counts until its last answer is stale.
+            }
+            // Unpaired or stopped meanwhile, or another server at that address now.
+            if (this.stopped || !this.peers.includes(peer) || hello.serverId !== peer.id) {
+              return
+            }
+            if (hello.master) {
+              this.masterSeen.set(peer.url, Date.now())
+            } else {
+              this.masterSeen.delete(peer.url)
+            }
+          })
+      )
+    } finally {
+      this.checkingMasters = false
+    }
+    // stop() may have run during the awaits above.
+    if (!(this.stopped as boolean)) {
+      this.announceRole()
+    }
   }
 
   /** Run `task` after every task queued before it. */
@@ -246,6 +304,14 @@ export class Multihelm {
     return this.masterCandidates().length > 1
   }
 
+  /** Calls `cb` whenever the role, the master or `masterConflict()` changes. */
+  onStatusChanged(cb: () => void): () => void {
+    this.statusListeners.add(cb)
+    return () => {
+      this.statusListeners.delete(cb)
+    }
+  }
+
   onRoleChanged(cb: (role: Role, master: PeerInfo | null) => void): () => void {
     this.roleListeners.add(cb)
     return () => {
@@ -257,15 +323,25 @@ export class Multihelm {
     const role = this.role()
     const master = this.master()
     const now = `${role}:${master?.id ?? ''}`
-    if (now === this.announcedRole) {
-      return
+    const status = `${now}:${String(this.masterConflict())}`
+    if (now !== this.announcedRole) {
+      this.announcedRole = now
+      for (const cb of this.roleListeners) {
+        try {
+          cb(role, master)
+        } catch (error) {
+          this.host.error(`Multihelm: a role listener failed: ${errorText(error)}`)
+        }
+      }
     }
-    this.announcedRole = now
-    for (const cb of this.roleListeners) {
-      try {
-        cb(role, master)
-      } catch (error) {
-        this.host.error(`Multihelm: a role listener failed: ${errorText(error)}`)
+    if (status !== this.announcedStatus) {
+      this.announcedStatus = status
+      for (const cb of this.statusListeners) {
+        try {
+          cb()
+        } catch (error) {
+          this.host.error(`Multihelm: a status listener failed: ${errorText(error)}`)
+        }
       }
     }
   }

@@ -84,11 +84,11 @@ export default function (app: ServerAPI): Plugin {
         master: () => mh.master(),
         onRoleChanged: (cb) => mh.onRoleChanged(cb)
       })
-      const showRole = (role: Role, master: PeerInfo | null): void => {
-        app.setPluginStatus(statusText(role, master, mh.masterConflict()))
+      const showRole = (): void => {
+        app.setPluginStatus(statusText(mh.role(), mh.master(), mh.masterConflict()))
       }
-      stopRoleStatus = mh.onRoleChanged(showRole)
-      showRole(mh.role(), mh.master())
+      stopRoleStatus = mh.onStatusChanged(showRole)
+      showRole()
     },
 
     stop() {

@@ -107,13 +107,13 @@ async function listen(app: http.RequestListener): Promise<{ server: http.Server;
   return { server, url: `http://127.0.0.1:${String(port)}` }
 }
 
-async function station(name: string, master = false): Promise<Station> {
+async function station(name: string, master: () => boolean = () => false): Promise<Station> {
   const dir = path.join(root, name, 'folder')
   fs.mkdirSync(dir, { recursive: true })
   const mh = new Multihelm(new MultihelmStore(path.join(root, name, 'data')), {
     ...quiet(),
     serverName: () => name,
-    isMaster: () => master
+    isMaster: master
   })
   const dataset = new FolderDataset(dir)
   const handle = mh.registerDataset(dataset)
@@ -275,8 +275,8 @@ describe('the master role', () => {
     }
   })
 
-  async function make(name: string, master: boolean): Promise<Station> {
-    const s = await station(name, master)
+  async function make(name: string, master: boolean | (() => boolean)): Promise<Station> {
+    const s = await station(name, typeof master === 'function' ? master : () => master)
     stations.push(s)
     return s
   }
@@ -320,6 +320,58 @@ describe('the master role', () => {
     expect(second?.mh.master()?.id).toBe(first?.mh.serverId)
     expect(x.mh.masterConflict()).toBe(true)
     expect(y.mh.masterConflict()).toBe(true)
+  })
+
+  it('learns the master while a round is still busy', async () => {
+    let isMaster = false
+    const master = await make('role-busy-salon', () => isMaster)
+    const member = await make('role-busy-port', false)
+    await member.mh.pair(master.url)
+    isMaster = true
+
+    let release: () => void = () => undefined
+    const blocked = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    const list = member.dataset.list
+    member.dataset.list = async () => {
+      await blocked
+      return list()
+    }
+    const round = member.mh.runRound()
+    await member.mh.checkMasters()
+    expect(member.mh.master()).toMatchObject({ name: 'role-busy-salon' })
+    release()
+    await round
+    member.dataset.list = list
+  })
+
+  it('tells status listeners when a conflict ends, though the role stays', async () => {
+    const set = new Map<string, boolean>([
+      ['role-c-x', true],
+      ['role-c-y', true]
+    ])
+    const x = await make('role-c-x', () => set.get('role-c-x') === true)
+    const y = await make('role-c-y', () => set.get('role-c-y') === true)
+    await x.mh.pair(y.url)
+    await y.mh.pair(x.url)
+    await x.mh.runRound()
+    await y.mh.runRound()
+    const larger = x.mh.serverId > y.mh.serverId ? x : y
+    const smaller = larger === x ? y : x
+    const roles: string[] = []
+    const statuses: boolean[] = []
+    smaller.mh.onRoleChanged((role) => {
+      roles.push(role)
+    })
+    smaller.mh.onStatusChanged(() => {
+      statuses.push(smaller.mh.masterConflict())
+    })
+    set.set(larger === x ? 'role-c-x' : 'role-c-y', false)
+    await smaller.mh.checkMasters()
+    expect(smaller.mh.role()).toBe('master')
+    expect(roles).toEqual([])
+    expect(statuses).toEqual([false])
   })
 })
 
