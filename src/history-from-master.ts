@@ -18,6 +18,8 @@ import type {
 import type { MasterResponse, MasterRouteHandle } from './api.js'
 
 export const HISTORY_PREFIX = '/signalk/v2/api/history/'
+const HTTP_OK = 200
+const HTTP_NOT_FOUND = 404
 
 export interface MasterHistoryHost {
   registerMasterRoute: (prefix: string) => MasterRouteHandle
@@ -68,6 +70,8 @@ export function valuesQuery(request: ValuesRequest): string {
 
 export class MasterHistory {
   private registered = false
+  /** Only the latest check may act on its answer; stop() outdates every check in flight. */
+  private latestCheck = 0
   private route: MasterRouteHandle | null = null
   private readonly provider: HistoryProvider = {
     getValues: (request: ValuesRequest) =>
@@ -82,6 +86,7 @@ export class MasterHistory {
 
   /** Registers while the master has a history provider, and withdraws otherwise. */
   async check(): Promise<void> {
+    const thisCheck = ++this.latestCheck
     if (!this.host.hasMaster()) {
       this.withdraw()
       return
@@ -89,13 +94,15 @@ export class MasterHistory {
     this.route ??= this.host.registerMasterRoute(HISTORY_PREFIX)
     let providers: unknown
     try {
-      const answer = await this.host.fetchMaster(`${HISTORY_PREFIX}_providers`)
-      providers = answer.status === 200 ? JSON.parse(answer.body.toString('utf-8')) : {}
+      providers = await this.masterProviders()
     } catch (error) {
       // A master that answers again soon keeps serving the history meanwhile.
       this.host.debug(
         `Multihelm: cannot ask the master for its history providers: ${error instanceof Error ? error.message : String(error)}`
       )
+      return
+    }
+    if (thisCheck !== this.latestCheck) {
       return
     }
     const masterHasHistory =
@@ -112,6 +119,7 @@ export class MasterHistory {
   }
 
   stop(): void {
+    this.latestCheck++
     this.withdraw()
     this.route?.unregister()
     this.route = null
@@ -125,9 +133,21 @@ export class MasterHistory {
     }
   }
 
+  /** A master without the History API has no providers; any other failure says nothing. */
+  private async masterProviders(): Promise<unknown> {
+    const answer = await this.host.fetchMaster(`${HISTORY_PREFIX}_providers`)
+    if (answer.status === HTTP_NOT_FOUND) {
+      return {}
+    }
+    if (answer.status !== HTTP_OK) {
+      throw new Error(`HTTP ${String(answer.status)}`)
+    }
+    return JSON.parse(answer.body.toString('utf-8')) as unknown
+  }
+
   private async read<T>(query: string): Promise<T> {
     const answer = await this.host.fetchMaster(`${HISTORY_PREFIX}${query}`)
-    if (answer.status !== 200) {
+    if (answer.status !== HTTP_OK) {
       throw new Error(`the master's History API answered HTTP ${String(answer.status)}`)
     }
     return JSON.parse(answer.body.toString('utf-8')) as T

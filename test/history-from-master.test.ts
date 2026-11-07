@@ -16,6 +16,9 @@ function fakeHost(providers: unknown) {
     hasMaster: true,
     providers,
     fail: false,
+    status: 200,
+    /** While set, the master's answer about its providers waits for it. */
+    hold: null as Promise<void> | null,
     requested: [] as string[],
     routes: [] as string[],
     provider: null as HistoryProvider | null,
@@ -36,7 +39,8 @@ function fakeHost(providers: unknown) {
         return Promise.reject(new Error('unreachable'))
       }
       if (path === `${HISTORY_PREFIX}_providers`) {
-        return Promise.resolve(answer(200, state.providers))
+        const reply = answer(state.status, state.providers)
+        return (state.hold ?? Promise.resolve()).then(() => reply)
       }
       return Promise.resolve(answer(200, { path }))
     },
@@ -153,5 +157,48 @@ describe('MasterHistory', () => {
 
     expect(state.provider).toBeNull()
     expect(state.routes).toEqual([])
+  })
+
+  it('keeps serving while the master answers with an error, and withdraws without a History API', async () => {
+    const { state, history } = fakeHost({ 'signalk-questdb': { isDefault: true } })
+    await history.check()
+    state.status = 500
+    await history.check()
+    expect(state.provider).not.toBeNull()
+
+    state.status = 404
+    await history.check()
+    expect(state.provider).toBeNull()
+  })
+
+  it('acts only on the answer of the latest check', async () => {
+    const { state, history } = fakeHost({ 'signalk-questdb': { isDefault: true } })
+    let release = (): void => undefined
+    state.hold = new Promise((resolve) => {
+      release = resolve
+    })
+    const stale = history.check()
+    state.hold = null
+    state.providers = {}
+    await history.check()
+    release()
+    await stale
+
+    expect(state.provider).toBeNull()
+  })
+
+  it('ignores an answer that arrives after stop', async () => {
+    const { state, history } = fakeHost({ 'signalk-questdb': { isDefault: true } })
+    let release = (): void => undefined
+    state.hold = new Promise((resolve) => {
+      release = resolve
+    })
+    const pending = history.check()
+    history.stop()
+    release()
+    await pending
+
+    expect(state.provider).toBeNull()
+    expect(state.registrations).toBe(0)
   })
 })
