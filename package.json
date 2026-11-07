@@ -23,7 +23,10 @@
     "redundancy"
   ],
   "signalk": {
-    "displayName": "Multihelm"
+    "displayName": "Multihelm",
+    "recommends": [
+      "signalk-charts-provider-simple"
+    ]
   },
   "signalk-plugin-enabled-by-default": true,
   "files": [
