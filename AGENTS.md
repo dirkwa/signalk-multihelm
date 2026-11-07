@@ -22,6 +22,9 @@ sets by hand on one server (see `README.md`).
   `router.access`; admin `status`, `peers`, `run`.
 - `master-proxy.ts` — `MasterProxy`: on a member, serves the master's GET
   answers under the prefixes plugins registered, with the pairing token.
+- `history-from-master.ts` — `MasterHistory`: on a member, a History API
+  provider that reads the master's, registered only while the master has
+  one.
 - `discovery.ts` — mDNS browse for `_signalk-http(s)._tcp`.
 - `vessel-settings.ts` — the vessel data and path metadata the user set,
   read from the server's base deltas (`app.config.baseDeltaEditor`).

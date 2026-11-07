@@ -12,6 +12,7 @@ import {
 } from './api.js'
 import { ServerDiscovery } from './discovery.js'
 import { MasterFollower } from './follow-master.js'
+import { MasterHistory, canWithdrawHistoryProvider } from './history-from-master.js'
 import { MASTER_ROUTE, MasterProxy } from './master-proxy.js'
 import { Multihelm, ROUND_INTERVAL_MS } from './multihelm.js'
 import { ROUTE_PREFIX } from './peer-client.js'
@@ -39,10 +40,21 @@ const ConfigSchema = Type.Object({
     description:
       "Display names, units, zones and alarm limits set for paths. Changes made here are replaced by the master's.",
     default: true
+  }),
+  historyFromMaster: Type.Boolean({
+    title: "Answer this server's History API from the master",
+    description:
+      "While the master has a history provider (signalk-questdb, for example), history graphs on this server show the master's history, so it is kept once on the boat. Does nothing on the master, while the master has no history, or before Signal K 2.32.0.",
+    default: true
   })
 })
 
-type Config = { master?: unknown; followVessel?: unknown; followMetadata?: unknown }
+type Config = {
+  master?: unknown
+  followVessel?: unknown
+  followMetadata?: unknown
+  historyFromMaster?: unknown
+}
 
 const APPROVE_HINT =
   "approve Multihelm's request under Security -> Access Requests on this server to take the vessel settings over"
@@ -180,9 +192,39 @@ export default function (app: ServerAPI): Plugin {
       }
       const followTimer = setInterval(follow, ROUND_INTERVAL_MS)
       const stopRoleFollow = mh.onRoleChanged(follow)
+      const history =
+        settings.historyFromMaster !== false && canWithdrawHistoryProvider(app)
+          ? new MasterHistory({
+              registerMasterRoute: (prefix) => proxy.register(prefix),
+              fetchMaster: (target) => proxy.fetch(target),
+              hasMaster: () => mh.masterAccess() !== null,
+              register: (provider) => {
+                app.registerHistoryApiProvider(provider)
+              },
+              unregister: () => {
+                app.unregisterHistoryApiProvider()
+              },
+              debug: (msg) => {
+                app.debug(msg)
+              }
+            })
+          : null
+      const checkHistory = (): void => {
+        history?.check().catch((error: unknown) => {
+          app.error(
+            `Multihelm: serving the master's history: ${error instanceof Error ? error.message : String(error)}`
+          )
+        })
+      }
+      const historyTimer = setInterval(checkHistory, ROUND_INTERVAL_MS)
+      const stopRoleHistory = mh.onRoleChanged(checkHistory)
+      checkHistory()
       stopFollowing = () => {
         clearInterval(followTimer)
         stopRoleFollow()
+        clearInterval(historyTimer)
+        stopRoleHistory()
+        history?.stop()
       }
       stopRoleStatus = mh.onStatusChanged(showRole)
       showRole()
