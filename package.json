@@ -24,6 +24,10 @@
   ],
   "signalk": {
     "displayName": "Multihelm",
+    "appIcon": "./icon.svg",
+    "screenshots": [
+      "./docs/screenshots/overview.png"
+    ],
     "recommends": [
       "signalk-charts-provider-simple",
       "signalk-questdb"
@@ -31,7 +35,9 @@
   },
   "signalk-plugin-enabled-by-default": true,
   "files": [
-    "plugin/**/*"
+    "plugin/**/*",
+    "icon.svg",
+    "docs/screenshots/*.png"
   ],
   "engines": {
     "node": ">=24.0.0",
