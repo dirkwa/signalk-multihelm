@@ -25,7 +25,8 @@
   "signalk": {
     "displayName": "Multihelm",
     "recommends": [
-      "signalk-charts-provider-simple"
+      "signalk-charts-provider-simple",
+      "signalk-questdb"
     ]
   },
   "signalk-plugin-enabled-by-default": true,
