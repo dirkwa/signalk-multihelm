@@ -66,6 +66,16 @@ credentials, and the route follows this server's own security: whoever may
 not read here cannot read through it either. While no other server is the
 master, it answers 503.
 
+## History from the master
+
+While the master has a History API provider (signalk-questdb, for example),
+every other server answers its own History API from the master's, so history
+graphs on any station show the master's history and it is kept once on the
+boat. A server with a history provider of its own keeps it; the server's
+settings say which provider is the default. This stops when the master is
+gone or has no history, and can be turned off per server in the plugin
+settings. The master records what it receives itself.
+
 ## How replication works
 
 - Each entry of a dataset carries a counter and the server that last changed
