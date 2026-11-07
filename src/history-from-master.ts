@@ -68,6 +68,14 @@ export function valuesQuery(request: ValuesRequest): string {
   return params.toString()
 }
 
+/** Before Signal K 2.32.0 a plugin cannot withdraw its history provider, so it must not register one. */
+export function canWithdrawHistoryProvider(app: object): boolean {
+  return (
+    typeof (app as { unregisterHistoryApiProvider?: unknown }).unregisterHistoryApiProvider ===
+    'function'
+  )
+}
+
 export class MasterHistory {
   private registered = false
   /** Only the latest check may act on its answer; stop() outdates every check in flight. */

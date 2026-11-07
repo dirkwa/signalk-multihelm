@@ -12,7 +12,7 @@ import {
 } from './api.js'
 import { ServerDiscovery } from './discovery.js'
 import { MasterFollower } from './follow-master.js'
-import { MasterHistory } from './history-from-master.js'
+import { MasterHistory, canWithdrawHistoryProvider } from './history-from-master.js'
 import { MASTER_ROUTE, MasterProxy } from './master-proxy.js'
 import { Multihelm, ROUND_INTERVAL_MS } from './multihelm.js'
 import { ROUTE_PREFIX } from './peer-client.js'
@@ -44,7 +44,7 @@ const ConfigSchema = Type.Object({
   historyFromMaster: Type.Boolean({
     title: "Answer this server's History API from the master",
     description:
-      "While the master has a history provider (signalk-questdb, for example), history graphs on this server show the master's history, so it is kept once on the boat. Does nothing on the master, or while the master has no history.",
+      "While the master has a history provider (signalk-questdb, for example), history graphs on this server show the master's history, so it is kept once on the boat. Does nothing on the master, while the master has no history, or before Signal K 2.32.0.",
     default: true
   })
 })
@@ -193,7 +193,7 @@ export default function (app: ServerAPI): Plugin {
       const followTimer = setInterval(follow, ROUND_INTERVAL_MS)
       const stopRoleFollow = mh.onRoleChanged(follow)
       const history =
-        settings.historyFromMaster !== false
+        settings.historyFromMaster !== false && canWithdrawHistoryProvider(app)
           ? new MasterHistory({
               registerMasterRoute: (prefix) => proxy.register(prefix),
               fetchMaster: (target) => proxy.fetch(target),

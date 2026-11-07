@@ -74,7 +74,8 @@ graphs on any station show the master's history and it is kept once on the
 boat. A server with a history provider of its own keeps it; the server's
 settings say which provider is the default. This stops when the master is
 gone or has no history, and can be turned off per server in the plugin
-settings. The master records what it receives itself.
+settings. The master records what it receives itself. It needs Signal K
+2.32.0 or later on the server that is not the master.
 
 ## How replication works
 

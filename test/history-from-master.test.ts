@@ -2,7 +2,12 @@ import type { HistoryProvider, ValuesRequest } from '@signalk/server-api/history
 import { describe, expect, it } from 'vitest'
 
 import type { MasterResponse } from '../src/api.js'
-import { HISTORY_PREFIX, MasterHistory, valuesQuery } from '../src/history-from-master.js'
+import {
+  HISTORY_PREFIX,
+  MasterHistory,
+  canWithdrawHistoryProvider,
+  valuesQuery
+} from '../src/history-from-master.js'
 
 /** Temporal values reach the provider as objects that print as ISO 8601. */
 const iso = (text: string): never => ({ toString: () => text }) as never
@@ -94,6 +99,18 @@ describe('valuesQuery', () => {
 
     expect(params.get('from')).toBe('2026-11-07T08:00:00Z')
     expect(params.get('to')).toBe('2026-11-07T09:00:00Z')
+  })
+})
+
+describe('canWithdrawHistoryProvider', () => {
+  it('is false on a server that cannot withdraw a plugin provider', () => {
+    expect(canWithdrawHistoryProvider({ registerHistoryApiProvider: () => undefined })).toBe(false)
+    expect(
+      canWithdrawHistoryProvider({
+        registerHistoryApiProvider: () => undefined,
+        unregisterHistoryApiProvider: () => undefined
+      })
+    ).toBe(true)
   })
 })
 
