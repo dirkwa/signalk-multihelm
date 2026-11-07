@@ -5,6 +5,8 @@ without depending on a single one. Every server holds a full copy of what is
 replicated and works on its own; when one is off, the others carry on, and it
 catches up when it comes back.
 
+![A master server shares vessel data, metadata and services with the other servers, which replicate charts among themselves; each server may have its own NMEA 2000 connection](docs/screenshots/overview.png)
+
 Multihelm owns the membership (finding and pairing the boat's servers) and the
 transport. Other plugins register what they want replicated as a _dataset_.
 The first one is
