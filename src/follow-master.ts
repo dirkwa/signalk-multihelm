@@ -4,7 +4,8 @@
  * master with the pairing token and written here through this server's own
  * REST API, the way its settings pages write them, so they survive a
  * restart. Writing needs an admin device token on this server, asked for
- * once; until it is approved nothing is written.
+ * once; until it is approved nothing is written. Metadata of a path the
+ * master has none for stays as it is, unless it was the master's before.
  */
 
 import { isDeepStrictEqual } from 'node:util'
@@ -51,6 +52,48 @@ function hasPriorities(priorities: SourcePriorities): boolean {
   return priorities.groups.length > 0 || Object.keys(priorities.overrides).length > 0
 }
 
+/**
+ * What was last written here and what this server kept of it, seen a round
+ * later. A server may keep a value differently from how it was written (a
+ * base delta file with the same path twice keeps the older one in force), so
+ * a value is not written again until the master's or this server's changes.
+ */
+class WrittenValues {
+  private readonly written = new Map<string, { target: unknown; kept?: { value: unknown } }>()
+
+  /** Whether `target` is to be written over `local`. */
+  due(key: string, target: unknown, local: unknown): boolean {
+    if (isDeepStrictEqual(target, local)) {
+      this.written.delete(key)
+      return false
+    }
+    const last = this.written.get(key)
+    if (last && isDeepStrictEqual(last.target, target)) {
+      if (!last.kept) {
+        last.kept = { value: local }
+        return false
+      }
+      if (isDeepStrictEqual(last.kept.value, local)) {
+        return false
+      }
+    }
+    return true
+  }
+
+  wrote(key: string, target: unknown): void {
+    this.written.set(key, { target })
+  }
+
+  /** What is not looked at in a round may have changed meanwhile, so it is forgotten. */
+  keepOnly(keys: ReadonlySet<string>): void {
+    for (const key of this.written.keys()) {
+      if (!keys.has(key)) {
+        this.written.delete(key)
+      }
+    }
+  }
+}
+
 function metaUrl(base: string, path: string): string {
   const segments = path.split('.').map((s) => encodeURIComponent(s))
   return `${base}/signalk/v1/api/vessels/self/${segments.join('/')}/meta`
@@ -58,16 +101,21 @@ function metaUrl(base: string, path: string): string {
 
 export class MasterFollower {
   private access: OwnAccess
+  private readonly prioritiesWritten = new WrittenValues()
+  private readonly metaWritten = new WrittenValues()
   /**
-   * The master's priorities last written here and what this server kept of
-   * them, seen a round later: should it keep them differently, they are not
-   * written again until the master's or this server's change.
+   * The paths whose metadata is the master's: all it has, and the ones it
+   * had until they are gone here too.
    */
-  private prioritiesWritten: { target: SourcePriorities; kept: SourcePriorities | null } | null =
-    null
+  private followedMeta: Set<string>
+  /** The list as last saved; a failed save is tried again the next round. */
+  private followedMetaSaved: string
 
   constructor(private readonly host: FollowHost) {
     this.access = host.store.loadOwnAccess()
+    const followed = host.store.loadFollowedMeta()
+    this.followedMeta = new Set(followed)
+    this.followedMetaSaved = JSON.stringify(followed.sort())
   }
 
   /** Whether the user has to approve this server's own access request. */
@@ -104,10 +152,16 @@ export class MasterFollower {
     }
     const vesselChanged =
       followVessel && VESSEL_FIELDS.some((k) => remote.vessel[k] !== local.vessel[k])
+    if (followMeta) {
+      this.followedMeta = new Set([
+        ...Object.keys(remote.meta),
+        ...[...this.followedMeta].filter((p) => local.meta[p] !== undefined)
+      ])
+      this.metaWritten.keepOnly(this.followedMeta)
+      this.saveFollowedMeta()
+    }
     const metaChanged = followMeta
-      ? [...new Set([...Object.keys(remote.meta), ...Object.keys(local.meta)])].filter(
-          (p) => !isDeepStrictEqual(remote.meta[p], local.meta[p])
-        )
+      ? [...this.followedMeta].filter((p) => this.metaWritten.due(p, remote.meta[p], local.meta[p]))
       : []
     const priorities = followPriorities
       ? this.prioritiesToWrite(remote.priorities, local.priorities)
@@ -129,16 +183,34 @@ export class MasterFollower {
         await (value === undefined
           ? callServer('DELETE', metaUrl(base, path), token)
           : callServer('PUT', metaUrl(base, path), token, { value }))
+        this.metaWritten.wrote(path, value)
       }
       if (priorities) {
         await callServer('PUT', `${base}/skServer/priorities`, token, priorities)
-        this.prioritiesWritten = { target: priorities, kept: null }
+        this.prioritiesWritten.wrote('', priorities)
       }
     } catch (error) {
       if (error instanceof PeerHttpError && (error.status === 401 || error.status === 403)) {
         this.setAccess({ token: '', state: 'none' })
       }
       this.host.error(`Multihelm: taking over the master's vessel settings: ${errorText(error)}`)
+    }
+    if (followMeta) {
+      this.saveFollowedMeta()
+    }
+  }
+
+  private saveFollowedMeta(): void {
+    const paths = [...this.followedMeta].sort()
+    const text = JSON.stringify(paths)
+    if (text === this.followedMetaSaved) {
+      return
+    }
+    try {
+      this.host.store.saveFollowedMeta(paths)
+      this.followedMetaSaved = text
+    } catch (error) {
+      this.host.error(`Multihelm: saving the paths that follow the master: ${errorText(error)}`)
     }
   }
 
@@ -149,21 +221,7 @@ export class MasterFollower {
     if (!remote || !hasPriorities(remote) || !local) {
       return null
     }
-    if (isDeepStrictEqual(remote, local)) {
-      this.prioritiesWritten = null
-      return null
-    }
-    const written = this.prioritiesWritten
-    if (written && isDeepStrictEqual(written.target, remote)) {
-      if (written.kept === null) {
-        written.kept = local
-        return null
-      }
-      if (isDeepStrictEqual(written.kept, local)) {
-        return null
-      }
-    }
-    return remote
+    return this.prioritiesWritten.due('', remote, local) ? remote : null
   }
 
   /** The vessel route writes every field, so the ones that stay here are sent back as they are. */

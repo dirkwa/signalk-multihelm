@@ -17,7 +17,8 @@ sets by hand on one server (see `README.md`).
 - `library.ts` — pure version rules: listing → versions and tombstones,
   manifests, recording a peer's entry.
 - `store.ts` — state in the data dir: server id, peers (mode 0600, they hold
-  tokens), one library per dataset.
+  tokens), one library per dataset, the paths whose metadata follows the
+  master.
 - `peer-client.ts` — HTTP to peers: hello, manifest, file with `Range`
   resume, device access requests.
 - `routes.ts` — readonly `hello`/`manifest`/`file` and `master/*` via

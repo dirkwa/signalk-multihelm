@@ -94,7 +94,11 @@ describe('MasterFollower', () => {
     o.put('/skServer/vessel', (_req, res) => {
       res.send('Vessel changed')
     })
-    o.put('/signalk/v1/api/vessels/self/*rest', (_req, res) => {
+    o.put('/signalk/v1/api/vessels/self/*rest', (req, res) => {
+      if (req.url.includes('/broken/')) {
+        res.status(500).json({ error: 'cannot write' })
+        return
+      }
       res.status(202).json({ state: 'PENDING' })
     })
     o.put('/skServer/priorities', (_req, res) => {
@@ -128,7 +132,7 @@ describe('MasterFollower', () => {
     })
   }
 
-  it('writes what differs from the master, keeping the fields that stay here', async () => {
+  it('writes what differs from the master, keeping the fields and paths that stay here', async () => {
     calls.length = 0
     local = {
       vessel: { name: 'Old' },
@@ -148,14 +152,144 @@ describe('MasterFollower', () => {
         url: '/signalk/v1/api/vessels/self/environment/depth/belowTransducer/meta',
         auth: undefined,
         body: { value: { displayName: 'Depth' } }
-      },
-      {
-        method: 'DELETE',
-        url: '/signalk/v1/api/vessels/self/navigation/speedOverGround/meta',
-        auth: undefined,
-        body: undefined
       }
     ])
+  })
+
+  it("removes a path's metadata once the master has none for it, if it was the master's", async () => {
+    const depth = 'environment.depth.belowTransducer'
+    calls.length = 0
+    local = structuredClone(masterSettings)
+    await follower('followed').run()
+    expect(calls).toEqual([])
+
+    masterAnswer = { vessel: masterSettings.vessel, meta: {} }
+    await follower('followed').run()
+    const writes = calls.filter((c) => c.method !== 'POST' && c.method !== 'GET')
+    expect(writes.map((c) => `${c.method} ${c.url}`)).toEqual([
+      'DELETE /signalk/v1/api/vessels/self/environment/depth/belowTransducer/meta'
+    ])
+
+    local = { vessel: masterSettings.vessel, meta: {} }
+    await follower('followed').run()
+    calls.length = 0
+    local = { vessel: masterSettings.vessel, meta: { [depth]: { displayName: 'Mine again' } } }
+    await follower('followed').run()
+    expect(calls).toEqual([])
+  })
+
+  it("removes the master's metadata again after a restart while this server still has it", async () => {
+    const depth = { 'environment.depth.belowTransducer': { units: 'm' } }
+    masterAnswer = { vessel: masterSettings.vessel, meta: depth }
+    local = { vessel: masterSettings.vessel, meta: structuredClone(depth) }
+    await follower('kept-after-delete').run()
+
+    masterAnswer = { vessel: masterSettings.vessel, meta: {} }
+    const deletes = (): number => calls.filter((c) => c.method === 'DELETE').length
+    calls.length = 0
+    const f = follower('kept-after-delete')
+    await f.run()
+    await f.run()
+    expect(deletes()).toBe(1)
+    await follower('kept-after-delete').run()
+    expect(deletes()).toBe(2)
+    masterAnswer = masterSettings
+    masterAnswer = masterSettings
+  })
+
+  it('remembers the metadata it took over before a later write failed', async () => {
+    masterAnswer = {
+      vessel: masterSettings.vessel,
+      meta: { 'environment.depth.belowTransducer': { units: 'm' }, 'broken.path': { units: 'V' } }
+    }
+    local = { vessel: masterSettings.vessel, meta: {} }
+    await follower('partly').run()
+
+    masterAnswer = { vessel: masterSettings.vessel, meta: {} }
+    local = {
+      vessel: masterSettings.vessel,
+      meta: { 'environment.depth.belowTransducer': { units: 'm' } }
+    }
+    calls.length = 0
+    await follower('partly').run()
+    expect(calls.filter((c) => c.method === 'DELETE').map((c) => c.url)).toEqual([
+      '/signalk/v1/api/vessels/self/environment/depth/belowTransducer/meta'
+    ])
+    masterAnswer = masterSettings
+  })
+
+  it("counts a path that already matched the master's as taken over though a write failed", async () => {
+    const depth = { 'environment.depth.belowTransducer': { units: 'm' } }
+    masterAnswer = {
+      vessel: masterSettings.vessel,
+      meta: { ...depth, 'broken.path': { units: 'V' } }
+    }
+    local = { vessel: masterSettings.vessel, meta: structuredClone(depth) }
+    await follower('matched').run()
+
+    masterAnswer = { vessel: masterSettings.vessel, meta: {} }
+    calls.length = 0
+    await follower('matched').run()
+    expect(calls.filter((c) => c.method === 'DELETE').map((c) => c.url)).toEqual([
+      '/signalk/v1/api/vessels/self/environment/depth/belowTransducer/meta'
+    ])
+    masterAnswer = masterSettings
+  })
+
+  it('keeps track of the paths taken over while its own access request waits', async () => {
+    const depth = { 'environment.depth.belowTransducer': { units: 'm' } }
+    security = true
+    approval = 'PENDING'
+    masterAnswer = {
+      vessel: masterSettings.vessel,
+      meta: { ...depth, 'other.path': { units: 'V' } }
+    }
+    local = { vessel: masterSettings.vessel, meta: structuredClone(depth) }
+    await follower('waiting').run()
+
+    approval = 'APPROVED'
+    masterAnswer = { vessel: masterSettings.vessel, meta: {} }
+    calls.length = 0
+    await follower('waiting').run()
+    expect(calls.filter((c) => c.method === 'DELETE').map((c) => c.url)).toEqual([
+      '/signalk/v1/api/vessels/self/environment/depth/belowTransducer/meta'
+    ])
+    security = false
+    masterAnswer = masterSettings
+  })
+
+  it('writes metadata the master brings back after both servers had removed it', async () => {
+    const depth = { 'environment.depth.belowTransducer': { units: 'm' } }
+    const f = follower('brought-back')
+    const metaWrites = (): number => calls.filter((c) => c.url.endsWith('/meta')).length
+    calls.length = 0
+    masterAnswer = { vessel: masterSettings.vessel, meta: depth }
+    local = { vessel: masterSettings.vessel, meta: {} }
+    await f.run()
+    masterAnswer = { vessel: masterSettings.vessel, meta: {} }
+    await f.run()
+    masterAnswer = { vessel: masterSettings.vessel, meta: depth }
+    await f.run()
+    expect(metaWrites()).toBe(2)
+    masterAnswer = masterSettings
+  })
+
+  it("writes a path's metadata once when this server keeps it differently, again once it changes here", async () => {
+    const kept = { displayName: 'Depth', zones: [] }
+    local = { vessel: masterSettings.vessel, meta: {} }
+    const f = follower('meta-kept-differently')
+    const metaWrites = (): number => calls.filter((c) => c.url.endsWith('/meta')).length
+
+    calls.length = 0
+    await f.run()
+    local = { ...local, meta: { 'environment.depth.belowTransducer': kept } }
+    await f.run()
+    await f.run()
+    expect(metaWrites()).toBe(1)
+
+    local = { ...local, meta: {} }
+    await f.run()
+    expect(metaWrites()).toBe(2)
   })
 
   it('writes nothing when this server already matches the master', async () => {
@@ -192,18 +326,17 @@ describe('MasterFollower', () => {
   })
 
   it('encodes the path segments of a metadata write', async () => {
-    calls.length = 0
-    local = {
-      vessel: structuredClone(masterSettings.vessel),
-      meta: {
-        ...structuredClone(masterSettings.meta),
-        'electrical.batteries.house:bank.voltage': { units: 'V' }
-      }
+    masterAnswer = {
+      ...masterSettings,
+      meta: { ...masterSettings.meta, 'electrical.batteries.house:bank.voltage': { units: 'V' } }
     }
+    calls.length = 0
+    local = structuredClone(masterSettings)
     await follower('encoded').run()
-    expect(calls.filter((c) => c.method === 'DELETE').map((c) => c.url)).toEqual([
+    expect(calls.filter((c) => c.method === 'PUT').map((c) => c.url)).toEqual([
       '/signalk/v1/api/vessels/self/electrical/batteries/house%3Abank/voltage/meta'
     ])
+    masterAnswer = masterSettings
   })
 
   it('does nothing without a master', async () => {

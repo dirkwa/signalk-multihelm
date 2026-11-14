@@ -52,6 +52,8 @@ export const OwnAccessSchema = Type.Object({
 
 export type OwnAccess = Static<typeof OwnAccessSchema>
 
+const PathsFileSchema = Type.Array(Type.String())
+
 const LibraryFileSchema = Type.Object({
   seq: Type.Integer({ minimum: 0 }),
   entries: Type.Record(Type.String(), Type.Any())
@@ -113,6 +115,16 @@ export class MultihelmStore {
 
   saveOwnAccess(access: OwnAccess): void {
     writeAtomic(path.join(this.dir, 'own-access.json'), JSON.stringify(access), 0o600)
+  }
+
+  /** The paths whose metadata this server takes over from the master. */
+  loadFollowedMeta(): string[] {
+    const raw = readJson(path.join(this.dir, 'followed-meta.json'))
+    return Value.Check(PathsFileSchema, raw) ? raw : []
+  }
+
+  saveFollowedMeta(paths: readonly string[]): void {
+    writeAtomic(path.join(this.dir, 'followed-meta.json'), JSON.stringify(paths))
   }
 
   /** A random id made once per installation: every server of a boat shares its vessel id. */
