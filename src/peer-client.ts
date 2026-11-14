@@ -187,27 +187,27 @@ export function normalizePeerUrl(input: string): string | null {
  * itself when Signal K made it.
  */
 export async function locatePeer(url: string): Promise<PeerAddress> {
-  const target = new URL(url)
-  if (target.protocol === 'http:' && !(await redirectsToTls(target))) {
+  const typed = new URL(url)
+  const target = typed.protocol === 'https:' ? typed : await httpsTarget(typed)
+  if (!target) {
     return { url }
   }
-  target.protocol = 'https:'
   const secureUrl = `https://${target.host}`
   const ca = await untrustedAnchor(target)
   return ca === undefined ? { url: secureUrl } : { url: secureUrl, ca }
 }
 
-/** Whether HTTP `target` is to be reached over HTTPS; sets the port to use then. */
-async function redirectsToTls(target: URL): Promise<boolean> {
+/** Where HTTP `target` is to be reached over HTTPS instead; null when it is not. */
+async function httpsTarget(target: URL): Promise<URL | null> {
   let res: RawResponse
   try {
     res = await send('GET', `${target.origin}/signalk`)
   } catch (error) {
     // A Signal K server's SSL port, typed without `https://`, hangs up on plain HTTP.
     if ((error as { code?: unknown }).code === 'ECONNRESET') {
-      target.port ||= '80'
-      if (await speaksTls(target)) {
-        return true
+      const same = new URL(`https://${target.hostname}:${target.port || '80'}`)
+      if (await speaksTls(same)) {
+        return same
       }
     }
     throw error
@@ -215,14 +215,12 @@ async function redirectsToTls(target: URL): Promise<boolean> {
   res.stream.resume()
   const location = res.status >= 300 && res.status < 400 ? res.stream.headers.location : undefined
   if (location === undefined) {
-    return false
+    return null
   }
   const next = new URL(location, target)
-  if (next.protocol !== 'https:' || next.hostname !== target.hostname) {
-    return false
-  }
-  target.port = next.port || '443'
-  return true
+  return next.protocol === 'https:' && next.hostname === target.hostname
+    ? new URL(`https://${next.host}`)
+    : null
 }
 
 function connectTls(target: URL): Promise<tls.TLSSocket> {

@@ -113,17 +113,26 @@ const UNTRUSTED_CERTIFICATE = new Set([
   'CERT_REJECTED'
 ])
 
-/**
- * Why a paired peer cannot be reached in a way that pairing it again
- * mends: its certificate changed, or it went over to HTTPS. Null otherwise.
- */
-function pairAgainText(error: unknown): string | null {
-  if (error instanceof PeerHttpError) {
-    return error.status >= 300 && error.status < 400
-      ? 'it redirects to another address, likely its HTTPS one; pair it again'
-      : null
+function errorCode(error: unknown): unknown {
+  return (error as { code?: unknown } | null)?.code
+}
+
+function isRedirect(error: unknown): boolean {
+  return error instanceof PeerHttpError && error.status >= 300 && error.status < 400
+}
+
+/** Pairing the peer again mends it: its certificate changed, or it went over to HTTPS. */
+function needsPairingAgain(error: unknown): boolean {
+  const code = errorCode(error)
+  return isRedirect(error) || (typeof code === 'string' && UNTRUSTED_CERTIFICATE.has(code))
+}
+
+/** `error` in words when it is about the peer's certificate or a redirect; null otherwise. */
+function connectionText(error: unknown): string | null {
+  if (isRedirect(error)) {
+    return 'it redirects to another address, likely its HTTPS one; pair it again'
   }
-  const code = (error as { code?: unknown } | null)?.code
+  const code = errorCode(error)
   if (typeof code !== 'string') {
     return null
   }
@@ -142,7 +151,7 @@ function pairAgainText(error: unknown): string | null {
 /** Said without the address, which the panel shows anyway. */
 function helloErrorText(error: unknown): string {
   if (!(error instanceof PeerHttpError)) {
-    return pairAgainText(error) ?? errorText(error)
+    return connectionText(error) ?? errorText(error)
   }
   switch (error.status) {
     case 404:
@@ -151,7 +160,7 @@ function helloErrorText(error: unknown): string {
     case 403:
       return 'access was revoked on the peer'
     default:
-      return pairAgainText(error) ?? `HTTP ${String(error.status)}`
+      return connectionText(error) ?? `HTTP ${String(error.status)}`
   }
 }
 
@@ -663,15 +672,14 @@ export class Multihelm {
         delete peer.lastError
       }
     } catch (error) {
-      const again = pairAgainText(error)
       if (error instanceof PeerHttpError && (error.status === 401 || error.status === 403)) {
         peer.state = 'needs-pairing'
         peer.lastError = 'access was revoked on the peer'
-      } else if (again !== null) {
-        peer.state = 'needs-pairing'
-        peer.lastError = again
       } else {
-        peer.lastError = errorText(error)
+        if (needsPairingAgain(error)) {
+          peer.state = 'needs-pairing'
+        }
+        peer.lastError = connectionText(error) ?? errorText(error)
       }
       this.host.debug(`Multihelm: ${peer.name}: ${peer.lastError}`)
     }
