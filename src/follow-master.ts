@@ -1,8 +1,9 @@
 /**
- * On a server that is not the master: takes the vessel data and path
- * metadata over from the master. They are read from the master with the
- * pairing token and written here through this server's own REST API, the
- * way its settings pages write them, so they survive a restart. Writing
+ * On a server that is not the master: takes the vessel data, path metadata
+ * and source priorities over from the master. They are read from the
+ * master with the pairing token and written here through this server's own
+ * REST API, the way its settings pages write them, so they survive a
+ * restart. Writing
  * needs an admin device token on this server, asked for once; until it is
  * approved nothing is written.
  */
@@ -17,6 +18,7 @@ import {
   requestAccess,
   type AccessRequestResult
 } from './peer-client.js'
+import type { SourcePriorities } from './source-priorities.js'
 import type { MultihelmStore, OwnAccess } from './store.js'
 import {
   VESSEL_FIELDS,
@@ -36,12 +38,18 @@ export interface FollowHost {
   master: () => { url: string; token: string } | null
   followVessel: boolean
   followMeta: boolean
+  followPriorities: boolean
   debug: (msg: string) => void
   error: (msg: string) => void
 }
 
 function errorText(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
+}
+
+/** A master where none are set yet would wipe the ones a server kept from before Multihelm. */
+function hasPriorities(priorities: SourcePriorities): boolean {
+  return priorities.groups.length > 0 || Object.keys(priorities.overrides).length > 0
 }
 
 function metaUrl(base: string, path: string): string {
@@ -67,10 +75,10 @@ export class MasterFollower {
   }
 
   async run(): Promise<void> {
-    const { followVessel, followMeta } = this.host
+    const { followVessel, followMeta, followPriorities } = this.host
     const master = this.host.master()
     const local = this.host.localSettings()
-    if ((!followVessel && !followMeta) || !master || !local) {
+    if ((!followVessel && !followMeta && !followPriorities) || !master || !local) {
       return
     }
     let remote: VesselSettings | null
@@ -90,7 +98,15 @@ export class MasterFollower {
           (p) => !isDeepStrictEqual(remote.meta[p], local.meta[p])
         )
       : []
-    if (!vesselChanged && metaChanged.length === 0) {
+    const priorities =
+      followPriorities &&
+      remote.priorities !== undefined &&
+      hasPriorities(remote.priorities) &&
+      local.priorities !== undefined &&
+      !isDeepStrictEqual(remote.priorities, local.priorities)
+        ? remote.priorities
+        : null
+    if (!vesselChanged && metaChanged.length === 0 && !priorities) {
       return
     }
     const token = await this.ownToken()
@@ -107,6 +123,9 @@ export class MasterFollower {
         await (value === undefined
           ? callServer('DELETE', metaUrl(base, path), token)
           : callServer('PUT', metaUrl(base, path), token, { value }))
+      }
+      if (priorities) {
+        await callServer('PUT', `${base}/skServer/priorities`, token, priorities)
       }
     } catch (error) {
       if (error instanceof PeerHttpError && (error.status === 401 || error.status === 403)) {

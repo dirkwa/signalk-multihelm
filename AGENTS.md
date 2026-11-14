@@ -28,9 +28,13 @@ sets by hand on one server (see `README.md`).
 - `discovery.ts` — mDNS browse for `_signalk-http(s)._tcp`.
 - `vessel-settings.ts` — the vessel data and path metadata the user set,
   read from the server's base deltas (`app.config.baseDeltaEditor`).
+- `source-priorities.ts` — the source priorities the user set, in the shape
+  of `/skServer/priorities`, read from `app.config.settings`; peers get them
+  in `vessel-settings`.
 - `follow-master.ts` — `MasterFollower`: on a member, takes those over from
   the master and writes what differs through this server's own REST API
-  (`/skServer/vessel`, meta PUT/DELETE) with an admin device token on itself.
+  (`/skServer/vessel`, meta PUT/DELETE, `/skServer/priorities`) with an
+  admin device token on itself.
 
 ## Contracts other software depends on
 
