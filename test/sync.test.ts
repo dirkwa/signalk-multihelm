@@ -493,27 +493,31 @@ describe('the overview of the servers', () => {
   })
 
   it('takes no error over from a pairing removed while its hello was under way', async () => {
-    let slowFailure = false
+    let holdNext = false
+    let held: ((res: http.ServerResponse) => void) | null = null
+    const heldArrived = new Promise<http.ServerResponse>((resolve) => {
+      held = resolve
+    })
     const { server, url } = await listen((req, res) => {
       if (req.method === 'POST') {
         res.statusCode = 404
         res.end('{}')
-      } else if (slowFailure) {
-        slowFailure = false
-        setTimeout(() => {
-          res.statusCode = 503
-          res.end('{}')
-        }, 200)
+      } else if (holdNext) {
+        holdNext = false
+        held?.(res)
       } else {
         res.end(JSON.stringify({ serverId: 'again-id', name: 'again', protocol: 1 }))
       }
     })
     const mh = new Multihelm(new MultihelmStore(path.join(root, 'repaired')), quiet())
     await mh.pair(url)
-    slowFailure = true
+    holdNext = true
     const checking = mh.checkMasters()
+    const stale = await heldArrived
     await mh.unpair(url)
     await mh.pair(url)
+    stale.statusCode = 503
+    stale.end('{}')
     await checking
     server.close()
     expect(mh.peerInfo()[0]).toMatchObject({ state: 'paired', online: true })
