@@ -52,8 +52,10 @@ settings.
 Source priorities name a source by its connection, such as `can0.115`, so
 they match on another server only where the source comes in under the same
 connection name: give the NMEA 2000 bus the same connection name on every
-server. A source only one server has is added after the ones the master
-named. While none are set on the master, each server keeps its own.
+server. Once the master has priorities set, a server's own are replaced by
+them as a whole, so groups and overrides set only there are gone, and a
+source only that server has is in none of the master's groups. While none
+are set on the master, each server keeps its own.
 
 To write them so they survive a restart, Multihelm asks its own server once
 for admin access: approve it under **Security -> Access Requests** on each
