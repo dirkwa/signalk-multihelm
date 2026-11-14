@@ -1,10 +1,10 @@
 /**
- * On a server that is not the master: takes the vessel data and path
- * metadata over from the master. They are read from the master with the
- * pairing token and written here through this server's own REST API, the
- * way its settings pages write them, so they survive a restart. Writing
- * needs an admin device token on this server, asked for once; until it is
- * approved nothing is written.
+ * On a server that is not the master: takes the vessel data, path metadata
+ * and source priorities over from the master. They are read from the
+ * master with the pairing token and written here through this server's own
+ * REST API, the way its settings pages write them, so they survive a
+ * restart. Writing needs an admin device token on this server, asked for
+ * once; until it is approved nothing is written.
  */
 
 import { isDeepStrictEqual } from 'node:util'
@@ -17,6 +17,7 @@ import {
   requestAccess,
   type AccessRequestResult
 } from './peer-client.js'
+import type { SourcePriorities } from './source-priorities.js'
 import type { MultihelmStore, OwnAccess } from './store.js'
 import {
   VESSEL_FIELDS,
@@ -36,12 +37,18 @@ export interface FollowHost {
   master: () => { url: string; token: string } | null
   followVessel: boolean
   followMeta: boolean
+  followPriorities: boolean
   debug: (msg: string) => void
   error: (msg: string) => void
 }
 
 function errorText(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
+}
+
+/** A master where none are set yet would wipe the ones a server kept from before Multihelm. */
+function hasPriorities(priorities: SourcePriorities): boolean {
+  return priorities.groups.length > 0 || Object.keys(priorities.overrides).length > 0
 }
 
 function metaUrl(base: string, path: string): string {
@@ -51,6 +58,13 @@ function metaUrl(base: string, path: string): string {
 
 export class MasterFollower {
   private access: OwnAccess
+  /**
+   * The master's priorities last written here and what this server kept of
+   * them, seen a round later: should it keep them differently, they are not
+   * written again until the master's or this server's change.
+   */
+  private prioritiesWritten: { target: SourcePriorities; kept: SourcePriorities | null } | null =
+    null
 
   constructor(private readonly host: FollowHost) {
     this.access = host.store.loadOwnAccess()
@@ -67,10 +81,10 @@ export class MasterFollower {
   }
 
   async run(): Promise<void> {
-    const { followVessel, followMeta } = this.host
+    const { followVessel, followMeta, followPriorities } = this.host
     const master = this.host.master()
     const local = this.host.localSettings()
-    if ((!followVessel && !followMeta) || !master || !local) {
+    if ((!followVessel && !followMeta && !followPriorities) || !master || !local) {
       return
     }
     let remote: VesselSettings | null
@@ -90,7 +104,10 @@ export class MasterFollower {
           (p) => !isDeepStrictEqual(remote.meta[p], local.meta[p])
         )
       : []
-    if (!vesselChanged && metaChanged.length === 0) {
+    const priorities = followPriorities
+      ? this.prioritiesToWrite(remote.priorities, local.priorities)
+      : null
+    if (!vesselChanged && metaChanged.length === 0 && !priorities) {
       return
     }
     const token = await this.ownToken()
@@ -108,12 +125,40 @@ export class MasterFollower {
           ? callServer('DELETE', metaUrl(base, path), token)
           : callServer('PUT', metaUrl(base, path), token, { value }))
       }
+      if (priorities) {
+        await callServer('PUT', `${base}/skServer/priorities`, token, priorities)
+        this.prioritiesWritten = { target: priorities, kept: null }
+      }
     } catch (error) {
       if (error instanceof PeerHttpError && (error.status === 401 || error.status === 403)) {
         this.setAccess({ token: '', state: 'none' })
       }
       this.host.error(`Multihelm: taking over the master's vessel settings: ${errorText(error)}`)
     }
+  }
+
+  private prioritiesToWrite(
+    remote: SourcePriorities | undefined,
+    local: SourcePriorities | undefined
+  ): SourcePriorities | null {
+    if (!remote || !hasPriorities(remote) || !local) {
+      return null
+    }
+    if (isDeepStrictEqual(remote, local)) {
+      this.prioritiesWritten = null
+      return null
+    }
+    const written = this.prioritiesWritten
+    if (written && isDeepStrictEqual(written.target, remote)) {
+      if (written.kept === null) {
+        written.kept = local
+        return null
+      }
+      if (isDeepStrictEqual(written.kept, local)) {
+        return null
+      }
+    }
+    return remote
   }
 
   /** The vessel route writes every field, so the ones that stay here are sent back as they are. */

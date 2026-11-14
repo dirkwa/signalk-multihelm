@@ -18,7 +18,8 @@ import { Multihelm, ROUND_INTERVAL_MS } from './multihelm.js'
 import { ROUTE_PREFIX } from './peer-client.js'
 import { registerRoutes } from './routes.js'
 import { MultihelmStore } from './store.js'
-import { vesselSettingsFromDeltas } from './vessel-settings.js'
+import { sourcePrioritiesFromSettings } from './source-priorities.js'
+import { vesselSettingsFromDeltas, type VesselSettings } from './vessel-settings.js'
 
 const PLUGIN_ID = 'signalk-multihelm'
 
@@ -41,6 +42,12 @@ const ConfigSchema = Type.Object({
       "Display names, units, zones and alarm limits set for paths. Changes made here are replaced by the master's.",
     default: true
   }),
+  followSourcePriorities: Type.Boolean({
+    title: 'Take the source priorities over from the master',
+    description:
+      "Which source wins for a path, from Data -> Source Priorities. They name sources by connection, so give the NMEA 2000 bus the same connection name on every server. Changes made here are replaced by the master's.",
+    default: true
+  }),
   historyFromMaster: Type.Boolean({
     title: "Answer this server's History API from the master",
     description:
@@ -53,6 +60,7 @@ type Config = {
   master?: unknown
   followVessel?: unknown
   followMetadata?: unknown
+  followSourcePriorities?: unknown
   historyFromMaster?: unknown
 }
 
@@ -77,7 +85,14 @@ type Host = ServerAPI & {
   config?: {
     getExternalPort?: () => number
     baseDeltaEditor?: { deltas?: unknown }
-    settings?: { ssl?: boolean; port?: number; sslport?: number }
+    settings?: {
+      ssl?: boolean
+      port?: number
+      sslport?: number
+      priorityGroups?: unknown
+      priorityOverrides?: unknown
+      priorityDefaults?: unknown
+    }
   }
 }
 
@@ -89,9 +104,16 @@ export default function (app: ServerAPI): Plugin {
   let stopRoleStatus: (() => void) | null = null
   let stopFollowing: (() => void) | null = null
 
-  function localVesselSettings(): ReturnType<typeof vesselSettingsFromDeltas> | null {
+  function localVesselSettings(): VesselSettings | null {
     const deltas = host.config?.baseDeltaEditor?.deltas
-    return deltas === undefined ? null : vesselSettingsFromDeltas(deltas)
+    if (deltas === undefined) {
+      return null
+    }
+    const settings = vesselSettingsFromDeltas(deltas)
+    const priorities = host.config?.settings
+      ? sourcePrioritiesFromSettings(host.config.settings)
+      : null
+    return priorities ? { ...settings, priorities } : settings
   }
 
   /** The port this server listens on, as the server itself works it out. */
@@ -155,6 +177,7 @@ export default function (app: ServerAPI): Plugin {
         master: () => mh.masterAccess(),
         followVessel: settings.followVessel !== false,
         followMeta: settings.followMetadata !== false,
+        followPriorities: settings.followSourcePriorities !== false,
         debug: (msg) => {
           app.debug(msg)
         },

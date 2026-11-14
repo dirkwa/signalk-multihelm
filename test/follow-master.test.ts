@@ -15,6 +15,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { MasterFollower, type FollowHost } from '../src/follow-master.js'
 import { ROUTE_PREFIX } from '../src/peer-client.js'
 import { MultihelmStore } from '../src/store.js'
+import type { SourcePriorities } from '../src/source-priorities.js'
 import type { VesselSettings } from '../src/vessel-settings.js'
 
 interface Call {
@@ -36,7 +37,14 @@ const masterSettings: VesselSettings = {
   meta: { 'environment.depth.belowTransducer': { displayName: 'Depth' } }
 }
 
+const masterPriorities: SourcePriorities = {
+  groups: [{ id: 'gps', sources: ['can0.gps-flybridge', 'can0.gps-salon'] }],
+  overrides: {},
+  defaults: { fallbackMs: 15000 }
+}
+
 describe('MasterFollower', () => {
+  let masterAnswer: VesselSettings = masterSettings
   const calls: Call[] = []
   let security = false
   let approval: 'PENDING' | 'APPROVED' = 'PENDING'
@@ -48,7 +56,7 @@ describe('MasterFollower', () => {
   beforeAll(async () => {
     const m = express()
     m.get(`${ROUTE_PREFIX}/vessel-settings`, (_req, res) => {
-      res.json(masterSettings)
+      res.json(masterAnswer)
     })
     master = await listen(m)
 
@@ -89,6 +97,9 @@ describe('MasterFollower', () => {
     o.put('/signalk/v1/api/vessels/self/*rest', (_req, res) => {
       res.status(202).json({ state: 'PENDING' })
     })
+    o.put('/skServer/priorities', (_req, res) => {
+      res.json({ result: 'ok' })
+    })
     o.delete('/signalk/v1/api/vessels/self/*rest', (_req, res) => {
       res.json({ state: 'COMPLETED' })
     })
@@ -110,6 +121,7 @@ describe('MasterFollower', () => {
       master: () => ({ url: master.url, token: 'pairing-token' }),
       followVessel: true,
       followMeta: true,
+      followPriorities: true,
       debug: () => undefined,
       error: () => undefined,
       ...options
@@ -198,5 +210,73 @@ describe('MasterFollower', () => {
     calls.length = 0
     await follower('alone', { master: () => null }).run()
     expect(calls).toEqual([])
+  })
+
+  it('takes the source priorities over once the master has any and this server can tell its own', async () => {
+    masterAnswer = { ...masterSettings, priorities: masterPriorities }
+    const same = { vessel: masterSettings.vessel, meta: masterSettings.meta }
+    const priorityWrites = (): Call[] =>
+      calls.filter((c) => c.method === 'PUT' && c.url === '/skServer/priorities')
+
+    calls.length = 0
+    local = { ...structuredClone(same), priorities: { groups: [], overrides: {}, defaults: {} } }
+    await follower('priorities').run()
+    expect(priorityWrites().map((c) => c.body)).toEqual([masterPriorities])
+
+    calls.length = 0
+    local = { ...structuredClone(same), priorities: structuredClone(masterPriorities) }
+    await follower('priorities-same').run()
+    local = structuredClone(same)
+    await follower('priorities-unknown').run()
+    local = { ...structuredClone(same), priorities: { groups: [], overrides: {}, defaults: {} } }
+    await follower('priorities-off', { followPriorities: false }).run()
+    masterAnswer = { ...masterSettings, priorities: { groups: [], overrides: {}, defaults: {} } }
+    local = { ...structuredClone(same), priorities: structuredClone(masterPriorities) }
+    await follower('priorities-none-on-master').run()
+    expect(calls).toEqual([])
+    masterAnswer = masterSettings
+  })
+
+  it('writes the priorities once when this server keeps them differently, again once they change here', async () => {
+    masterAnswer = { ...masterSettings, priorities: masterPriorities }
+    const kept = { ...masterPriorities, defaults: {} }
+    local = {
+      vessel: masterSettings.vessel,
+      meta: masterSettings.meta,
+      priorities: { groups: [], overrides: {}, defaults: {} }
+    }
+    const f = follower('priorities-kept-differently')
+    const priorityWrites = (): number =>
+      calls.filter((c) => c.method === 'PUT' && c.url === '/skServer/priorities').length
+
+    calls.length = 0
+    await f.run()
+    local = { ...local, priorities: kept }
+    await f.run()
+    await f.run()
+    expect(priorityWrites()).toBe(1)
+
+    local = { ...local, priorities: { groups: [], overrides: {}, defaults: {} } }
+    await f.run()
+    expect(priorityWrites()).toBe(2)
+    masterAnswer = masterSettings
+  })
+
+  it('writes the priorities again after a change here, once this server had kept them as written', async () => {
+    masterAnswer = { ...masterSettings, priorities: masterPriorities }
+    const empty = { groups: [], overrides: {}, defaults: {} }
+    local = { vessel: masterSettings.vessel, meta: masterSettings.meta, priorities: empty }
+    const f = follower('priorities-kept-as-written')
+    const priorityWrites = (): number =>
+      calls.filter((c) => c.method === 'PUT' && c.url === '/skServer/priorities').length
+
+    calls.length = 0
+    await f.run()
+    local = { ...local, priorities: structuredClone(masterPriorities) }
+    await f.run()
+    local = { ...local, priorities: empty }
+    await f.run()
+    expect(priorityWrites()).toBe(2)
+    masterAnswer = masterSettings
   })
 })

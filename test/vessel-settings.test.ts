@@ -85,4 +85,17 @@ describe('parseVesselSettings', () => {
     })
     expect(parseVesselSettings({ vessel: {} })).toBeNull()
   })
+
+  it('keeps the source priorities a peer sends', () => {
+    const priorities = { groups: [{ id: 'gps', sources: ['can0.a'] }], overrides: {}, defaults: {} }
+    expect(parseVesselSettings({ vessel: {}, meta: {}, priorities })).toEqual({
+      vessel: {},
+      meta: {},
+      priorities
+    })
+    expect(parseVesselSettings({ vessel: {}, meta: {}, priorities: 'x' })).toEqual({
+      vessel: {},
+      meta: {}
+    })
+  })
 })

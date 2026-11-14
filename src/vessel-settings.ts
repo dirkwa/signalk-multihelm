@@ -5,6 +5,8 @@
  * start; they are the self vessel's part of those deltas.
  */
 
+import { parseSourcePriorities, type SourcePriorities } from './source-priorities.js'
+
 /** The fields of the server's `/skServer/vessel` that follow the master. */
 export interface VesselData {
   name?: string
@@ -34,6 +36,8 @@ export interface VesselSettings {
   vessel: VesselData
   /** Signal K path -> its metadata. */
   meta: Record<string, unknown>
+  /** Absent from a server that does not send them, such as an older Multihelm. */
+  priorities?: SourcePriorities
 }
 
 const SELF = 'vessels.self'
@@ -141,5 +145,6 @@ export function parseVesselSettings(raw: unknown): VesselSettings | null {
       meta[path] = value
     }
   }
-  return { vessel, meta }
+  const priorities = parseSourcePriorities(raw.priorities)
+  return priorities ? { vessel, meta, priorities } : { vessel, meta }
 }

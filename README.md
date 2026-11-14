@@ -38,15 +38,24 @@ minutes no longer counts.
 When several servers are set, the one with the smallest server id is the
 master, and the plugin status says to set one only.
 
-## Vessel data and metadata from the master
+## Vessel data, metadata and source priorities from the master
 
 The vessel is described once, on the master. The other servers take over its
 vessel data from **Server -> Settings** (name, MMSI, call sign, length, beam,
 draft, air height, ship type) and the metadata set for paths (display names,
-units, zones, alarm limits), and follow every change once a minute. A change
-made on another server is replaced by the master's. GPS antenna positions
-stay with each server. Each of the two can be turned off per server in the
-plugin settings.
+units, zones, alarm limits) and the source priorities from **Data -> Source
+Priorities**, and follow every change once a minute. A change made on another
+server is replaced by the master's. GPS antenna positions stay with each
+server. Each of the three can be turned off per server in the plugin
+settings.
+
+Source priorities name a source by its connection, such as `can0.115`, so
+they match on another server only where the source comes in under the same
+connection name: give the NMEA 2000 bus the same connection name on every
+server. Once the master has priorities set, a server's own are replaced by
+them as a whole, so groups and overrides set only there are gone, and a
+source only that server has is in none of the master's groups. While none
+are set on the master, each server keeps its own.
 
 To write them so they survive a restart, Multihelm asks its own server once
 for admin access: approve it under **Security -> Access Requests** on each
