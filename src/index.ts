@@ -1,4 +1,7 @@
+import fs from 'node:fs'
 import os from 'node:os'
+import path from 'node:path'
+import { fileURLToPath } from 'node:url'
 
 import type { Plugin, ServerAPI } from '@signalk/server-api'
 
@@ -23,6 +26,17 @@ import { sourcePrioritiesFromSettings } from './source-priorities.js'
 import { vesselSettingsFromDeltas, type VesselSettings } from './vessel-settings.js'
 
 const PLUGIN_ID = 'signalk-multihelm'
+
+/** The bundle and the sources both sit one folder below `package.json`. */
+function multihelmVersion(): string | undefined {
+  try {
+    const file = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'package.json')
+    const { version } = JSON.parse(fs.readFileSync(file, 'utf-8')) as { version?: unknown }
+    return typeof version === 'string' ? version : undefined
+  } catch {
+    return undefined
+  }
+}
 
 type Config = {
   master?: unknown
@@ -51,6 +65,7 @@ function statusText(role: Role, master: PeerInfo | null, conflict: boolean): str
 /** The parts of the server the typed API leaves out. */
 type Host = ServerAPI & {
   config?: {
+    version?: string
     getExternalPort?: () => number
     baseDeltaEditor?: { deltas?: unknown }
     settings?: {
@@ -120,6 +135,7 @@ export default function (app: ServerAPI): Plugin {
       const mh = new Multihelm(store, {
         serverName: () => os.hostname(),
         isMaster: () => isMaster,
+        versions: () => ({ signalk: host.config?.version, multihelm: multihelmVersion() }),
         debug: (msg) => {
           app.debug(msg)
         },

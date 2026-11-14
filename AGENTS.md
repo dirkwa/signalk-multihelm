@@ -17,11 +17,12 @@ sets by hand on one server (see `README.md`).
 - `library.ts` — pure version rules: listing → versions and tombstones,
   manifests, recording a peer's entry.
 - `store.ts` — state in the data dir: server id, peers (mode 0600, they hold
-  tokens), one library per dataset.
+  tokens), one library per dataset, the servers paired with this one.
 - `peer-client.ts` — HTTP to peers: hello, manifest, file with `Range`
   resume, device access requests.
 - `routes.ts` — readonly `hello`/`manifest`/`file` and `master/*` via
-  `router.access`; admin `status`, `peers`, `run`.
+  `router.access`; admin `status`, `peers`, `paired-by`, `run`. `hello`
+  notes the server asking, from its query.
 - `master-proxy.ts` — `MasterProxy`: on a member, serves the master's GET
   answers under the prefixes plugins registered, with the pairing token.
 - `history-from-master.ts` — `MasterHistory`: on a member, a History API
@@ -50,7 +51,9 @@ sets by hand on one server (see `README.md`).
 - **Peer routes and their JSON** (`hello`, `manifest`, `file`,
   `vessel-settings`) between
   servers that may run different Multihelm versions: grow by addition and
-  bump `PROTOCOL` only for a breaking change.
+  bump `PROTOCOL` only for a breaking change. A server asking for `hello`
+  says who it is in the query (`from`, `name`, `signalk`, `multihelm`),
+  which older peers ignore.
 - **The master** is the server set to be it with the smallest server id,
   among this one and the paired peers whose `hello` said `master: true`
   within `MASTER_STALE_MS`. Every server must reach the same answer.

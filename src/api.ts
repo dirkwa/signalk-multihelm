@@ -81,6 +81,12 @@ export interface PeerInfo {
   lastError?: string
   /** The peer is set to be the boat's master, and answered within the last rounds. */
   master?: boolean
+  /** A paired peer answered within the last rounds. */
+  online?: boolean
+  /** The peer's Signal K server version, once it said. */
+  signalk?: string
+  /** The peer's Multihelm version, once it said. */
+  multihelm?: string
 }
 
 /**

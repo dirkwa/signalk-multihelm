@@ -9,11 +9,11 @@ import os from 'node:os'
 import path from 'node:path'
 
 import express from 'express'
-import { afterAll, beforeAll, describe, expect, it } from 'vitest'
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 
 import type { DatasetDefinition, DatasetEntry, DatasetHandle } from '../src/api.js'
 import { SETTLE_MS } from '../src/library.js'
-import { Multihelm, type MultihelmHost } from '../src/multihelm.js'
+import { MASTER_STALE_MS, Multihelm, type MultihelmHost } from '../src/multihelm.js'
 import { downloadFile, ROUTE_PREFIX } from '../src/peer-client.js'
 import { registerRoutes } from '../src/routes.js'
 import { MultihelmStore } from '../src/store.js'
@@ -113,7 +113,8 @@ async function station(name: string, master: () => boolean = () => false): Promi
   const mh = new Multihelm(new MultihelmStore(path.join(root, name, 'data')), {
     ...quiet(),
     serverName: () => name,
-    isMaster: master
+    isMaster: master,
+    versions: () => ({ signalk: '2.37.0', multihelm: `1.0.0-${name}` })
   })
   const dataset = new FolderDataset(dir)
   const handle = mh.registerDataset(dataset)
@@ -411,7 +412,7 @@ describe('a pairing waiting for approval', () => {
             ? JSON.stringify({ state: 'COMPLETED', accessRequest: { token: 'granted' } })
             : pending
         )
-      } else if (req.url === `${ROUTE_PREFIX}/hello`) {
+      } else if (req.url?.startsWith(`${ROUTE_PREFIX}/hello`)) {
         res.end(JSON.stringify({ serverId: 'helm-id', name: 'helm', protocol: 1, master: true }))
       } else {
         res.statusCode = 404
@@ -428,5 +429,128 @@ describe('a pairing waiting for approval', () => {
     server.close()
     expect(mh.peerInfo()[0]).toMatchObject({ state: 'paired', name: 'helm', id: 'helm-id' })
     expect(mh.master()).toMatchObject({ name: 'helm' })
+  })
+})
+
+describe('the overview of the servers', () => {
+  let a: Station
+  let b: Station
+
+  beforeAll(async () => {
+    a = await station('overview-master', () => true)
+    b = await station('overview-member')
+  })
+
+  afterAll(() => {
+    a.server.close()
+    b.server.close()
+  })
+
+  it('lists a member with the server it paired with, and each sees what the other runs', async () => {
+    await b.mh.pair(a.url)
+    await b.mh.checkMasters()
+
+    expect(b.mh.peerInfo()[0]).toMatchObject({
+      online: true,
+      master: true,
+      signalk: '2.37.0',
+      multihelm: '1.0.0-overview-master'
+    })
+    expect(a.mh.pairedByInfo()).toEqual([
+      {
+        id: b.mh.serverId,
+        name: 'overview-member',
+        signalk: '2.37.0',
+        multihelm: '1.0.0-overview-member',
+        lastSeen: expect.any(Number) as number,
+        online: true
+      }
+    ])
+  })
+
+  it('keeps the list across a restart, and forgets a server on request', () => {
+    const dir = path.join(root, 'overview-restart')
+    const before = new Multihelm(new MultihelmStore(dir), quiet())
+    before.sawPairedServer({ serverId: 'nav-id', name: 'nav', signalk: '2.37.0' })
+    before.stop()
+    const again = new Multihelm(new MultihelmStore(dir), quiet())
+    expect(again.pairedByInfo()).toMatchObject([{ id: 'nav-id', name: 'nav', signalk: '2.37.0' }])
+    expect(again.forgetPairedBy('nav-id')).toBe(true)
+    expect(new Multihelm(new MultihelmStore(dir), quiet()).pairedByInfo()).toEqual([])
+  })
+
+  it('gathers the writes of that list, however many servers ask', () => {
+    const store = new MultihelmStore(path.join(root, 'overview-flood'))
+    const save = vi.spyOn(store, 'savePairedBy')
+    const mh = new Multihelm(store, quiet())
+    for (let i = 0; i < 50; i++) {
+      mh.sawPairedServer({ serverId: `asker-${String(i)}`, name: `asker ${String(i)}` })
+    }
+    expect(save).not.toHaveBeenCalled()
+    mh.stop()
+    expect(save).toHaveBeenCalledTimes(1)
+    expect(mh.pairedByInfo()).toHaveLength(32)
+  })
+
+  it('takes no error over from a pairing removed while its hello was under way', async () => {
+    let slowFailure = false
+    const { server, url } = await listen((req, res) => {
+      if (req.method === 'POST') {
+        res.statusCode = 404
+        res.end('{}')
+      } else if (slowFailure) {
+        slowFailure = false
+        setTimeout(() => {
+          res.statusCode = 503
+          res.end('{}')
+        }, 200)
+      } else {
+        res.end(JSON.stringify({ serverId: 'again-id', name: 'again', protocol: 1 }))
+      }
+    })
+    const mh = new Multihelm(new MultihelmStore(path.join(root, 'repaired')), quiet())
+    await mh.pair(url)
+    slowFailure = true
+    const checking = mh.checkMasters()
+    await mh.unpair(url)
+    await mh.pair(url)
+    await checking
+    server.close()
+    expect(mh.peerInfo()[0]).toMatchObject({ state: 'paired', online: true })
+    expect(mh.peerInfo()[0]?.lastError).toBeUndefined()
+  })
+
+  it('counts a paired server that stopped answering as offline and says why, until it answers', async () => {
+    let up = true
+    const { server, url } = await listen((req, res) => {
+      if (req.method === 'POST') {
+        res.statusCode = 404
+        res.end('{}')
+        return
+      }
+      res.statusCode = up ? 200 : 503
+      res.end(JSON.stringify({ serverId: 'gone-id', name: 'gone', protocol: 1 }))
+    })
+    const mh = new Multihelm(new MultihelmStore(path.join(root, 'unreachable')), quiet())
+    await mh.pair(url)
+    up = false
+    vi.useFakeTimers({ toFake: ['Date'] })
+    try {
+      vi.setSystemTime(Date.now() + MASTER_STALE_MS + 1_000)
+      await mh.runRound()
+      expect(mh.peerInfo()[0]).toMatchObject({
+        state: 'paired',
+        online: false,
+        lastError: 'HTTP 503'
+      })
+
+      up = true
+      await mh.checkMasters()
+      expect(mh.peerInfo()[0]).toMatchObject({ online: true })
+      expect(mh.peerInfo()[0]?.lastError).toBeUndefined()
+    } finally {
+      vi.useRealTimers()
+      server.close()
+    }
   })
 })

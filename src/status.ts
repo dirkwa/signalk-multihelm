@@ -5,6 +5,7 @@
 
 import type { PeerInfo, Role } from './api.js'
 import type { DiscoveredServer } from './discovery.js'
+import type { PairedServer } from './store.js'
 
 /**
  * This server's own admin access request, which a member needs to write the
@@ -13,6 +14,9 @@ import type { DiscoveredServer } from './discovery.js'
  */
 export type OwnAccessState =
   { state: 'waiting-approval'; request: string } | { state: 'denied' } | null
+
+/** A server that paired with this one; online while it asked within the last rounds. */
+export type PairedByInfo = PairedServer & { online: boolean }
 
 export interface Status {
   /** The server lets peers read the peer routes with a readonly token (2.31 and later). */
@@ -25,7 +29,13 @@ export interface Status {
   master: PeerInfo | null
   masterConflict: boolean
   datasets: string[]
+  /** The servers this one pairs with: it takes over what they share. */
   peers: PeerInfo[]
+  /**
+   * The servers that paired with this one, as they said when they last asked
+   * for its `hello`; older Multihelm versions do not say.
+   */
+  pairedBy: PairedByInfo[]
   discovered: DiscoveredServer[]
   ownAccess: OwnAccessState
 }

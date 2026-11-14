@@ -2,14 +2,15 @@ import { useCallback, useEffect, useState, type SyntheticEvent } from 'react'
 
 import type { PeerInfo } from '../api.js'
 import type { Settings } from '../config.js'
-import type { Status } from '../status.js'
+import type { PairedByInfo, Status } from '../status.js'
 import {
   accessRequestsUrl,
   ago,
   approveAccessUrl,
   peerName,
   roleNotice,
-  unpairedServers
+  unpairedServers,
+  versionText
 } from './view.js'
 
 const BASE = '/plugins/signalk-multihelm'
@@ -101,6 +102,19 @@ export default function PluginConfigurationPanel({ configuration, save }: Props)
     )
   }
 
+  const forget = (server: PairedByInfo): void => {
+    if (
+      !window.confirm(
+        `Take ${server.name} off this list? It comes back once it asks this server again.`
+      )
+    ) {
+      return
+    }
+    void act(server.id, () =>
+      call(`${BASE}/paired-by?id=${encodeURIComponent(server.id)}`, { method: 'DELETE' })
+    )
+  }
+
   const allow = (request: string): void => {
     void act(OWN_ACCESS, () =>
       call(approveAccessUrl(request), {
@@ -136,14 +150,20 @@ export default function PluginConfigurationPanel({ configuration, save }: Props)
       )}
       {status?.running && (
         <>
+          {status.role === 'master' && (
+            <PairedByCard status={status} busy={busy} onForget={forget} />
+          )}
           <PeersCard status={status} busy={busy} onPair={pair} onUnpair={unpair} />
+          {status.role !== 'master' && status.pairedBy.length > 0 && (
+            <PairedByCard status={status} busy={busy} onForget={forget} />
+          )}
           <div className="card mb-3">
             <div className="card-header">Pair with another server</div>
             <div className="card-body">
               <p className="small text-body-secondary">
-                Each server takes over what the servers it is paired with share. Pair this one with
-                the boat's master; to replicate charts both ways, pair the other server with this
-                one too.
+                {status.role === 'master'
+                  ? 'The other servers pair with this one in their own Multihelm settings. Pair this one with another only to replicate charts both ways.'
+                  : "Each server takes over what the servers it is paired with share. Pair this one with the boat's master; to replicate charts both ways, pair the other server with this one too."}
               </p>
               <FoundServers status={status} busy={busy} onPair={pair} />
               <form className="row g-2 mt-1" onSubmit={(e) => void pairAddress(e)}>
@@ -191,7 +211,7 @@ function StatusNotices({
   allowError: string | null
   onAllow: (request: string) => void
 }) {
-  const notice = roleNotice(status)
+  const notice = roleNotice(status, Date.now())
   const own = status.ownAccess
   return (
     <>
@@ -253,7 +273,11 @@ function PeersCard({
       <div className="card-header">Paired servers</div>
       <div className="card-body">
         {status.peers.length === 0 ? (
-          <p className="text-body-secondary mb-0">This server is not paired with another yet.</p>
+          <p className="text-body-secondary mb-0">
+            {status.role === 'master'
+              ? 'This server takes nothing over from another.'
+              : 'This server is not paired with another yet.'}
+          </p>
         ) : (
           <table className="table table-sm align-middle mb-0">
             <tbody>
@@ -265,6 +289,9 @@ function PeersCard({
                       <strong>{name}</strong>
                       {peer.master && <span className="badge text-bg-primary ms-2">master</span>}
                       <div className="small text-body-secondary">{peer.url}</div>
+                      {versionText(peer) && (
+                        <div className="small text-body-secondary">{versionText(peer)}</div>
+                      )}
                     </td>
                     <td>
                       <PeerState peer={peer} name={name} status={status} now={now} />
@@ -317,7 +344,7 @@ function PeerState({
     <>
       {peer.state === 'paired' && (
         <>
-          <span className="badge text-bg-success">Paired</span>
+          <OnlineBadge online={peer.online === true} />
           <span className="small text-body-secondary ms-2">seen {ago(peer.lastSeen, now)}</span>
         </>
       )}
@@ -336,6 +363,74 @@ function PeerState({
       {peer.state === 'needs-pairing' && <span className="badge text-bg-danger">Not paired</span>}
       {peer.lastError && <div className="small text-danger mt-1">{peer.lastError}</div>}
     </>
+  )
+}
+
+function OnlineBadge({ online }: { online: boolean }) {
+  return online ? (
+    <span className="badge text-bg-success">Online</span>
+  ) : (
+    <span className="badge text-bg-secondary">Offline</span>
+  )
+}
+
+function PairedByCard({
+  status,
+  busy,
+  onForget
+}: {
+  status: Status
+  busy: string | null
+  onForget: (server: PairedByInfo) => void
+}) {
+  const now = Date.now()
+  return (
+    <div className="card mb-3">
+      <div className="card-header">Servers paired with this one</div>
+      <div className="card-body">
+        {status.pairedBy.length === 0 ? (
+          <p className="text-body-secondary mb-0">
+            No other server is paired with this one yet. Pair the others with it in their Multihelm
+            settings.
+          </p>
+        ) : (
+          <table className="table table-sm align-middle mb-0">
+            <tbody>
+              {status.pairedBy.map((server) => (
+                <tr key={server.id}>
+                  <td>
+                    <strong>{server.name}</strong>
+                    {versionText(server) && (
+                      <div className="small text-body-secondary">{versionText(server)}</div>
+                    )}
+                  </td>
+                  <td>
+                    <OnlineBadge online={server.online} />
+                    <span className="small text-body-secondary ms-2">
+                      seen {ago(server.lastSeen, now)}
+                    </span>
+                  </td>
+                  <td className="text-end">
+                    {!server.online && (
+                      <button
+                        type="button"
+                        className="btn btn-sm btn-outline-secondary"
+                        disabled={busy !== null}
+                        onClick={() => {
+                          onForget(server)
+                        }}
+                      >
+                        Forget
+                      </button>
+                    )}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </div>
+    </div>
   )
 }
 
