@@ -61,8 +61,10 @@ draft, air height, ship type) and the metadata set for paths (display names,
 units, zones, alarm limits) and the source priorities from **Data -> Source
 Priorities**, and follow every change once a minute. A change made on another
 server is replaced by the master's. GPS antenna positions stay with each
-server. Each of the three can be turned off per server in the plugin
-settings.
+server, and so does the metadata of a path the master has none for, such as
+a device that only one server reads; metadata the master removes goes on the
+other servers too. Each of the three can be turned off per server in the
+plugin settings.
 
 Source priorities name a source by its connection, such as `can0.115`, so
 they match on another server only where the source comes in under the same
