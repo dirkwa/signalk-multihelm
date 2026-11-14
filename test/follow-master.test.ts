@@ -94,7 +94,11 @@ describe('MasterFollower', () => {
     o.put('/skServer/vessel', (_req, res) => {
       res.send('Vessel changed')
     })
-    o.put('/signalk/v1/api/vessels/self/*rest', (_req, res) => {
+    o.put('/signalk/v1/api/vessels/self/*rest', (req, res) => {
+      if (req.url.includes('/broken/')) {
+        res.status(500).json({ error: 'cannot write' })
+        return
+      }
       res.status(202).json({ state: 'PENDING' })
     })
     o.put('/skServer/priorities', (_req, res) => {
@@ -170,6 +174,27 @@ describe('MasterFollower', () => {
     local = { vessel: masterSettings.vessel, meta: { [depth]: { displayName: 'Mine again' } } }
     await follower('followed').run()
     expect(calls).toEqual([])
+    masterAnswer = masterSettings
+  })
+
+  it('remembers the metadata it took over before a later write failed', async () => {
+    masterAnswer = {
+      vessel: masterSettings.vessel,
+      meta: { 'environment.depth.belowTransducer': { units: 'm' }, 'broken.path': { units: 'V' } }
+    }
+    local = { vessel: masterSettings.vessel, meta: {} }
+    await follower('partly').run()
+
+    masterAnswer = { vessel: masterSettings.vessel, meta: {} }
+    local = {
+      vessel: masterSettings.vessel,
+      meta: { 'environment.depth.belowTransducer': { units: 'm' } }
+    }
+    calls.length = 0
+    await follower('partly').run()
+    expect(calls.filter((c) => c.method === 'DELETE').map((c) => c.url)).toEqual([
+      '/signalk/v1/api/vessels/self/environment/depth/belowTransducer/meta'
+    ])
     masterAnswer = masterSettings
   })
 

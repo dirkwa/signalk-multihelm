@@ -137,7 +137,7 @@ export class MasterFollower {
       : null
     if (!vesselChanged && metaChanged.length === 0 && !priorities) {
       if (followMeta) {
-        this.setFollowedMeta(remote.meta)
+        this.setFollowedMeta(new Set(Object.keys(remote.meta)))
       }
       return
     }
@@ -146,6 +146,8 @@ export class MasterFollower {
       return
     }
     const base = this.host.ownUrl()
+    // What was written counts even when a later write fails.
+    let followed = new Set(this.followedMeta)
     try {
       if (vesselChanged) {
         await this.writeVessel(base, token, remote.vessel)
@@ -156,10 +158,13 @@ export class MasterFollower {
           ? callServer('DELETE', metaUrl(base, path), token)
           : callServer('PUT', metaUrl(base, path), token, { value }))
         this.metaWritten.wrote(path, value)
+        if (value === undefined) {
+          followed.delete(path)
+        } else {
+          followed.add(path)
+        }
       }
-      if (followMeta) {
-        this.setFollowedMeta(remote.meta)
-      }
+      followed = new Set(Object.keys(remote.meta))
       if (priorities) {
         await callServer('PUT', `${base}/skServer/priorities`, token, priorities)
         this.prioritiesWritten.wrote('', priorities)
@@ -170,6 +175,9 @@ export class MasterFollower {
       }
       this.host.error(`Multihelm: taking over the master's vessel settings: ${errorText(error)}`)
     }
+    if (followMeta) {
+      this.setFollowedMeta(followed)
+    }
   }
 
   /** The master's paths, and the ones that were the master's and are no longer. */
@@ -178,11 +186,17 @@ export class MasterFollower {
     return [...paths].filter((p) => this.metaWritten.due(p, remote[p], local[p]))
   }
 
-  private setFollowedMeta(remote: Record<string, unknown>): void {
-    const paths = Object.keys(remote)
-    if (paths.length !== this.followedMeta.size || paths.some((p) => !this.followedMeta.has(p))) {
-      this.followedMeta = new Set(paths)
-      this.host.store.saveFollowedMeta(paths)
+  /** Kept as it was until it is saved, so a failed save is tried again. */
+  private setFollowedMeta(paths: Set<string>): void {
+    const current = this.followedMeta
+    if (paths.size === current.size && [...paths].every((p) => current.has(p))) {
+      return
+    }
+    try {
+      this.host.store.saveFollowedMeta([...paths])
+      this.followedMeta = paths
+    } catch (error) {
+      this.host.error(`Multihelm: saving the paths that follow the master: ${errorText(error)}`)
     }
   }
 
