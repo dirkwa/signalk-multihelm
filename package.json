@@ -1,6 +1,6 @@
 {
   "name": "signalk-multihelm",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "description": "Keeps several Signal K servers on one boat in step, one per nav station, without depending on a single one",
   "author": "Dirk Wahrheit",
   "license": "Apache-2.0",
