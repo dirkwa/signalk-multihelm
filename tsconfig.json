@@ -16,5 +16,5 @@
     "noImplicitOverride": true
   },
   "include": ["src/**/*.ts"],
-  "exclude": ["node_modules", "plugin", "test"]
+  "exclude": ["node_modules", "plugin", "test", "src/configpanel"]
 }

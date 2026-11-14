@@ -15,11 +15,26 @@ chart files and shared ENC cells.
 
 ## Pairing
 
-Install Multihelm on every server. On one of them, open the plugin's page,
-pick another server from the list of servers found on the network (or enter
-its address) and pair. On a server with security, approve the request once
-under **Security → Access Requests** there. Pair each pair of servers once;
-every plugin that uses Multihelm shares that pairing.
+Install Multihelm on every server and set **This server is the boat's
+master** on one of them ([The master](#the-master)). Then, on each of the
+others, open **Server → Plugin Config → Multihelm** and:
+
+1. **Pair** with the master: pick it from the servers found on the network,
+   or enter its address.
+2. **Approve on the master**: log in there and approve the request
+   “Multihelm on _this server_” under **Security → Access Requests**. The
+   settings link to it and show the pairing as soon as it is approved.
+3. **Allow on this server**: once paired, the settings ask for admin access
+   to this server, to write the master's vessel data, metadata and source
+   priorities here. Click **Allow**.
+
+A server without security needs no approval. Every plugin that uses
+Multihelm shares the pairing.
+
+A server takes over what the servers it is paired with share. Pairing a
+server with the master is enough for the master's settings, history and
+services; for datasets that go both ways, such as charts, pair the other
+server with it too.
 
 Needs Signal K server 2.31 or later: peers read the replication routes with a
 readonly device token.
@@ -58,8 +73,8 @@ source only that server has is in none of the master's groups. While none
 are set on the master, each server keeps its own.
 
 To write them so they survive a restart, Multihelm asks its own server once
-for admin access: approve it under **Security -> Access Requests** on each
-server that is not the master (the plugin status says so while it waits). A
+for admin access: click **Allow** in its settings on each server that is not
+the master, or approve it under **Security -> Access Requests** there. A
 server without security needs nothing. A new MMSI takes effect on that server
 at its next restart, as when it is changed by hand.
 

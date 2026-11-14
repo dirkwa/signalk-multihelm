@@ -2,5 +2,5 @@
   "extends": "./tsconfig.json",
   "compilerOptions": { "noEmit": true, "rootDir": "." },
   "include": ["src/**/*.ts", "test/**/*.ts", "*.config.ts"],
-  "exclude": ["node_modules", "plugin"]
+  "exclude": ["node_modules", "plugin", "public", "src/configpanel"]
 }

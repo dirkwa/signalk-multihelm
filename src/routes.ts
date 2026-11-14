@@ -14,6 +14,7 @@ import type { IRouter, Request, Response } from 'express'
 import type { DiscoveredServer } from './discovery.js'
 import { MASTER_ROUTE, type MasterProxy } from './master-proxy.js'
 import type { Multihelm } from './multihelm.js'
+import type { OwnAccessState, Status } from './status.js'
 import type { VesselSettings } from './vessel-settings.js'
 
 type Handler = (req: Request, res: Response) => void | Promise<void>
@@ -42,7 +43,8 @@ export function registerRoutes(
   multihelm: () => Multihelm | null,
   discovered: () => DiscoveredServer[],
   vesselSettings: () => VesselSettings | null = () => null,
-  masterProxy: () => MasterProxy | null = () => null
+  masterProxy: () => MasterProxy | null = () => null,
+  ownAccess: () => OwnAccessState = () => null
 ): void {
   const scoped = (router as RouterWithAccess).access
   const available = typeof scoped === 'function'
@@ -141,17 +143,20 @@ export function registerRoutes(
 
   router.get('/status', (_req: Request, res: Response) => {
     const mh = multihelm()
-    res.json({
+    const status: Status = {
       available,
       running: mh !== null,
       serverId: mh?.serverId ?? null,
+      name: mh?.hello().name ?? '',
       role: mh?.role() ?? null,
       master: mh?.master() ?? null,
       masterConflict: mh?.masterConflict() ?? false,
       datasets: mh?.datasetIds() ?? [],
       peers: mh?.peerInfo() ?? [],
-      discovered: mh ? discovered() : []
-    })
+      discovered: mh ? discovered() : [],
+      ownAccess: mh ? ownAccess() : null
+    }
+    res.json(status)
   })
 
   router.post(

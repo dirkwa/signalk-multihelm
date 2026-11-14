@@ -395,3 +395,38 @@ describe('a peer that refuses the token', () => {
     })
   })
 })
+
+describe('a pairing waiting for approval', () => {
+  it('takes effect between rounds once it is approved', async () => {
+    let approved = false
+    const pending = JSON.stringify({ state: 'PENDING', href: '/signalk/v1/requests/1' })
+    const { server, url } = await listen((req, res) => {
+      res.setHeader('Content-Type', 'application/json')
+      if (req.method === 'POST' && req.url === '/signalk/v1/access/requests') {
+        res.statusCode = 202
+        res.end(pending)
+      } else if (req.url === '/signalk/v1/requests/1') {
+        res.end(
+          approved
+            ? JSON.stringify({ state: 'COMPLETED', accessRequest: { token: 'granted' } })
+            : pending
+        )
+      } else if (req.url === `${ROUTE_PREFIX}/hello`) {
+        res.end(JSON.stringify({ serverId: 'helm-id', name: 'helm', protocol: 1, master: true }))
+      } else {
+        res.statusCode = 404
+        res.end('{}')
+      }
+    })
+    const mh = new Multihelm(new MultihelmStore(path.join(root, 'pending')), quiet())
+    expect(await mh.pair(url)).toMatchObject({ state: 'waiting-approval' })
+    await mh.pollPairings()
+    expect(mh.peerInfo()[0]?.state).toBe('waiting-approval')
+
+    approved = true
+    await mh.pollPairings()
+    server.close()
+    expect(mh.peerInfo()[0]).toMatchObject({ state: 'paired', name: 'helm', id: 'helm-id' })
+    expect(mh.master()).toMatchObject({ name: 'helm' })
+  })
+})
