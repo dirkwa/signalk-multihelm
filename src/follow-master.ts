@@ -83,6 +83,15 @@ class WrittenValues {
   wrote(key: string, target: unknown): void {
     this.written.set(key, { target })
   }
+
+  /** What is not looked at in a round may have changed meanwhile, so it is forgotten. */
+  keepOnly(keys: ReadonlySet<string>): void {
+    for (const key of this.written.keys()) {
+      if (!keys.has(key)) {
+        this.written.delete(key)
+      }
+    }
+  }
 }
 
 function metaUrl(base: string, path: string): string {
@@ -143,6 +152,7 @@ export class MasterFollower {
         ...Object.keys(remote.meta),
         ...[...this.followedMeta].filter((p) => local.meta[p] !== undefined)
       ])
+      this.metaWritten.keepOnly(this.followedMeta)
       this.saveFollowedMeta()
     }
     const metaChanged = followMeta

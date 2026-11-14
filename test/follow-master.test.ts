@@ -238,6 +238,22 @@ describe('MasterFollower', () => {
     masterAnswer = masterSettings
   })
 
+  it('writes metadata the master brings back after both servers had removed it', async () => {
+    const depth = { 'environment.depth.belowTransducer': { units: 'm' } }
+    const f = follower('brought-back')
+    const metaWrites = (): number => calls.filter((c) => c.url.endsWith('/meta')).length
+    calls.length = 0
+    masterAnswer = { vessel: masterSettings.vessel, meta: depth }
+    local = { vessel: masterSettings.vessel, meta: {} }
+    await f.run()
+    masterAnswer = { vessel: masterSettings.vessel, meta: {} }
+    await f.run()
+    masterAnswer = { vessel: masterSettings.vessel, meta: depth }
+    await f.run()
+    expect(metaWrites()).toBe(2)
+    masterAnswer = masterSettings
+  })
+
   it("writes a path's metadata once when this server keeps it differently, again once it changes here", async () => {
     const kept = { displayName: 'Depth', zones: [] }
     local = { vessel: masterSettings.vessel, meta: {} }
