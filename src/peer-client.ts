@@ -3,17 +3,44 @@
  * device access request that pairs with it.
  *
  * Peers are other Signal K servers on the boat's network, addressed by the
- * URL the user confirmed. HTTPS peers are verified as usual, so a server
- * with a self-signed certificate is reached over its HTTP port instead.
+ * URL the user confirmed. An HTTPS peer is trusted the way Node trusts any
+ * server or, when no CA that Node knows vouches for it, by the certificate it
+ * presented when it was paired (see `locatePeer()`).
  */
 
+import { X509Certificate } from 'node:crypto'
 import fs from 'node:fs'
 import http from 'node:http'
 import https from 'node:https'
+import net from 'node:net'
 import { pipeline } from 'node:stream/promises'
+import tls from 'node:tls'
 
 export const ROUTE_PREFIX = '/plugins/signalk-multihelm'
 const REQUEST_TIMEOUT_MS = 30_000
+
+/**
+ * What Node calls a chain whose issuer it does not trust, the one failure a
+ * certificate kept from pairing stands in for. Expiry and a name it was not
+ * issued for are not among them: pinning must not paper over those.
+ */
+export const UNTRUSTED_ISSUER: ReadonlySet<string> = new Set([
+  'DEPTH_ZERO_SELF_SIGNED_CERT',
+  'SELF_SIGNED_CERT_IN_CHAIN',
+  'UNABLE_TO_VERIFY_LEAF_SIGNATURE',
+  'UNABLE_TO_GET_ISSUER_CERT',
+  'UNABLE_TO_GET_ISSUER_CERT_LOCALLY'
+])
+
+/** Where a peer is, and how to trust it over HTTPS. */
+export interface PeerAddress {
+  url: string
+  /**
+   * PEM of the certificate the peer's chain must lead to, taken when it was
+   * paired; absent when Node trusts the peer by itself, or over HTTP.
+   */
+  ca?: string
+}
 
 export interface Hello {
   serverId: string
@@ -76,10 +103,31 @@ export class PeerHttpError extends Error {
   }
 }
 
+/** How to check the certificate of `target`, an HTTPS URL, trusted by `ca` when it is set. */
+export function tlsOptions(target: URL, ca: string | undefined): https.RequestOptions {
+  if (ca) {
+    return {
+      ca,
+      // Trusted by this very certificate, whatever names it was issued for:
+      // Signal K's own is issued for `localhost`, and a boat's IPs change.
+      checkServerIdentity: () => undefined,
+      // It is the leaf or an intermediate when a server leaves the rest of its chain out.
+      allowPartialTrustChain: true
+    }
+  }
+  // This server itself, reached over loopback, may well have a self-signed certificate.
+  return target.hostname === '127.0.0.1' ? { rejectUnauthorized: false } : {}
+}
+
 function send(
   method: 'GET' | 'POST' | 'PUT' | 'DELETE',
   url: string,
-  options: { token?: string; body?: unknown; headers?: Record<string, string> } = {}
+  options: {
+    token?: string
+    body?: unknown
+    headers?: Record<string, string>
+    ca?: string | undefined
+  } = {}
 ): Promise<RawResponse> {
   const headers: Record<string, string> = { ...options.headers }
   if (options.token) {
@@ -93,11 +141,9 @@ function send(
   const target = new URL(url)
   const request = target.protocol === 'https:' ? https.request : http.request
   return new Promise((resolve, reject) => {
-    // This server itself, reached over loopback, may well have a self-signed certificate.
-    const rejectUnauthorized = target.hostname !== '127.0.0.1'
     const req = request(
       target,
-      { method, headers, timeout: REQUEST_TIMEOUT_MS, rejectUnauthorized },
+      { method, headers, timeout: REQUEST_TIMEOUT_MS, ...tlsOptions(target, options.ca) },
       (res) => {
         resolve({ status: res.statusCode ?? 0, stream: res })
       }
@@ -121,8 +167,8 @@ async function readBody(res: RawResponse): Promise<string> {
   return Buffer.concat(chunks).toString('utf-8')
 }
 
-async function getJson(url: string, token?: string): Promise<unknown> {
-  const res = await send('GET', url, { token })
+async function getJson(url: string, token?: string, ca?: string): Promise<unknown> {
+  const res = await send('GET', url, { token, ca })
   const text = await readBody(res)
   if (res.status < 200 || res.status >= 300) {
     throw new PeerHttpError(res.status, `HTTP ${String(res.status)} from ${url}`)
@@ -144,17 +190,127 @@ export function normalizePeerUrl(input: string): string | null {
   return `${url.protocol}//${url.host}`
 }
 
-export async function fetchHello(base: string, token?: string, from?: HelloFrom): Promise<Hello> {
+/**
+ * Where and how to reach the server at `url`, a normalized address, worked
+ * out when pairing with it. An HTTP port that redirects to HTTPS on the same
+ * host, as Signal K's does once SSL is on, is followed, and an address that
+ * speaks HTTPS only is taken as HTTPS. An HTTPS server that no CA Node knows
+ * vouches for is trusted from then on by the top certificate of the chain it
+ * presents: the CA when signalk-ssl issued its certificate, the certificate
+ * itself when Signal K made it.
+ */
+export async function locatePeer(url: string): Promise<PeerAddress> {
+  const typed = new URL(url)
+  const target = typed.protocol === 'https:' ? typed : await httpsTarget(typed)
+  if (!target) {
+    return { url }
+  }
+  const secureUrl = `https://${target.host}`
+  const ca = await untrustedAnchor(target)
+  return ca === undefined ? { url: secureUrl } : { url: secureUrl, ca }
+}
+
+/** Where HTTP `target` is to be reached over HTTPS instead; null when it is not. */
+async function httpsTarget(target: URL): Promise<URL | null> {
+  let res: RawResponse
+  try {
+    res = await send('GET', `${target.origin}/signalk`)
+  } catch (error) {
+    // A Signal K server's SSL port, typed without `https://`, hangs up on plain HTTP.
+    if ((error as { code?: unknown }).code === 'ECONNRESET') {
+      const same = new URL(`https://${target.hostname}:${target.port || '80'}`)
+      if (await speaksTls(same)) {
+        return same
+      }
+    }
+    throw error
+  }
+  res.stream.resume()
+  const location = res.status >= 300 && res.status < 400 ? res.stream.headers.location : undefined
+  if (location === undefined) {
+    return null
+  }
+  const next = new URL(location, target)
+  return next.protocol === 'https:' && next.hostname === target.hostname
+    ? new URL(`https://${next.host}`)
+    : null
+}
+
+function connectTls(target: URL): Promise<tls.TLSSocket> {
+  const host = target.hostname.replace(/^\[(.*)\]$/, '$1')
+  return new Promise((resolve, reject) => {
+    const socket = tls.connect(
+      {
+        host,
+        port: Number(target.port || 443),
+        ...(net.isIP(host) === 0 ? { servername: host } : {}),
+        // Checked by the caller, which needs the certificate either way.
+        rejectUnauthorized: false,
+        timeout: REQUEST_TIMEOUT_MS
+      },
+      () => {
+        resolve(socket)
+      }
+    )
+    socket.on('timeout', () => {
+      socket.destroy(new Error(`timeout after ${String(REQUEST_TIMEOUT_MS)} ms`))
+    })
+    socket.on('error', reject)
+  })
+}
+
+async function speaksTls(target: URL): Promise<boolean> {
+  try {
+    ;(await connectTls(target)).end()
+    return true
+  } catch {
+    return false
+  }
+}
+
+/**
+ * The top certificate of the chain `target` presents, as PEM, when Node
+ * refuses the chain for its issuer alone; undefined otherwise.
+ */
+async function untrustedAnchor(target: URL): Promise<string | undefined> {
+  const socket = await connectTls(target)
+  try {
+    // Node sets it to the error's code, though it is typed as the error.
+    const reason = String(socket.authorizationError)
+    if (socket.authorized || !UNTRUSTED_ISSUER.has(reason)) {
+      return undefined
+    }
+    let top = socket.getPeerCertificate(true)
+    // Node links a self-signed certificate to itself; the bound guards against any other loop.
+    for (let depth = 0; depth < 10; depth++) {
+      const issuer = top.issuerCertificate as tls.DetailedPeerCertificate | undefined
+      if (!issuer || issuer.fingerprint256 === top.fingerprint256) {
+        break
+      }
+      top = issuer
+    }
+    return new X509Certificate(top.raw).toString()
+  } finally {
+    socket.end()
+  }
+}
+
+export async function fetchHello(
+  peer: PeerAddress,
+  token?: string,
+  from?: HelloFrom
+): Promise<Hello> {
   const body = (await getJson(
-    `${base}${ROUTE_PREFIX}/hello${helloQuery(from)}`,
-    token
+    `${peer.url}${ROUTE_PREFIX}/hello${helloQuery(from)}`,
+    token,
+    peer.ca
   )) as Partial<Hello>
   if (typeof body.serverId !== 'string' || typeof body.protocol !== 'number') {
-    throw new Error(`${base} did not answer as a Multihelm peer`)
+    throw new Error(`${peer.url} did not answer as a Multihelm peer`)
   }
   const hello: Hello = {
     serverId: body.serverId,
-    name: typeof body.name === 'string' ? body.name : base,
+    name: typeof body.name === 'string' ? body.name : peer.url,
     protocol: body.protocol,
     datasets: Array.isArray(body.datasets)
       ? body.datasets.filter((d): d is string => typeof d === 'string')
@@ -170,8 +326,8 @@ export async function fetchHello(base: string, token?: string, from?: HelloFrom)
   }
 }
 
-export async function fetchVesselSettings(base: string, token: string): Promise<unknown> {
-  return getJson(`${base}${ROUTE_PREFIX}/vessel-settings`, token)
+export async function fetchVesselSettings(peer: PeerAddress, token: string): Promise<unknown> {
+  return getJson(`${peer.url}${ROUTE_PREFIX}/vessel-settings`, token, peer.ca)
 }
 
 /** A request to a Signal K server's own REST API; throws on any status but 2xx. */
@@ -195,24 +351,25 @@ export async function callServer(
 
 /** A page of a peer's dataset changes; its entries are checked by the caller. */
 export async function fetchManifest(
-  base: string,
+  peer: PeerAddress,
   token: string,
   dataset: string,
   since: number
 ): Promise<Manifest> {
   const body = (await getJson(
-    `${base}${ROUTE_PREFIX}/manifest?dataset=${encodeURIComponent(dataset)}&since=${String(since)}`,
-    token
+    `${peer.url}${ROUTE_PREFIX}/manifest?dataset=${encodeURIComponent(dataset)}&since=${String(since)}`,
+    token,
+    peer.ca
   )) as Partial<Manifest>
   if (typeof body.cursor !== 'number' || !Array.isArray(body.entries)) {
-    throw new Error(`${base} sent a malformed manifest`)
+    throw new Error(`${peer.url} sent a malformed manifest`)
   }
   return { cursor: body.cursor, entries: body.entries }
 }
 
 /** Download one file of a peer's entry into `dest`, resuming from what `dest` holds. */
 export function downloadFile(
-  base: string,
+  peer: PeerAddress,
   token: string,
   file: { dataset: string; key: string; name: string },
   dest: string
@@ -220,11 +377,11 @@ export function downloadFile(
   const query =
     `file?dataset=${encodeURIComponent(file.dataset)}` +
     `&key=${encodeURIComponent(file.key)}&file=${encodeURIComponent(file.name)}`
-  return download(base, token, query, `${file.key}/${file.name}`, dest)
+  return download(peer, token, query, `${file.key}/${file.name}`, dest)
 }
 
 async function download(
-  base: string,
+  peer: PeerAddress,
   token: string,
   query: string,
   label: string,
@@ -236,10 +393,11 @@ async function download(
   } catch {
     // Nothing to resume.
   }
-  const url = `${base}${ROUTE_PREFIX}/${query}`
+  const url = `${peer.url}${ROUTE_PREFIX}/${query}`
   const res = await send('GET', url, {
     token,
-    headers: offset > 0 ? { Range: `bytes=${String(offset)}-` } : {}
+    headers: offset > 0 ? { Range: `bytes=${String(offset)}-` } : {},
+    ca: peer.ca
   })
   if (res.status === 206) {
     await pipeline(res.stream, fs.createWriteStream(dest, { flags: 'a' }))
@@ -262,13 +420,14 @@ export type AccessRequestResult =
 
 /** Ask the peer for a device token, readonly unless said otherwise. */
 export async function requestAccess(
-  base: string,
+  peer: PeerAddress,
   clientId: string,
   description: string,
   permissions: 'readonly' | 'admin' = 'readonly'
 ): Promise<AccessRequestResult> {
-  const res = await send('POST', `${base}/signalk/v1/access/requests`, {
-    body: { clientId, description, permissions }
+  const res = await send('POST', `${peer.url}/signalk/v1/access/requests`, {
+    body: { clientId, description, permissions },
+    ca: peer.ca
   })
   const text = await readBody(res)
   if (res.status === 404) {
@@ -284,13 +443,13 @@ export async function requestAccess(
 }
 
 /** Follow up an access request that is waiting for approval. */
-export async function pollAccess(base: string, href: string): Promise<AccessRequestResult> {
-  const url = href.startsWith('/') ? `${base}${href}` : href
-  if (!url.startsWith(`${base}/`)) {
+export async function pollAccess(peer: PeerAddress, href: string): Promise<AccessRequestResult> {
+  const url = href.startsWith('/') ? `${peer.url}${href}` : href
+  if (!url.startsWith(`${peer.url}/`)) {
     return { kind: 'error', message: 'the access request points to another server' }
   }
   try {
-    return interpretReply(await getJson(url))
+    return interpretReply(await getJson(url, undefined, peer.ca))
   } catch (error) {
     if (error instanceof PeerHttpError && error.status === 404) {
       return { kind: 'denied' }

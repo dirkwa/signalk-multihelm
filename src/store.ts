@@ -18,6 +18,8 @@ export const PeerSchema = Type.Object({
   name: Type.String(),
   /** Base URL of the peer's Signal K server, e.g. `http://192.168.1.20:3000`. */
   url: Type.String(),
+  /** PEM of the certificate its HTTPS chain must lead to; see `PeerAddress`. */
+  ca: Type.Optional(Type.String()),
   /** Readonly device token; empty when the peer runs without security. */
   token: Type.String(),
   /** Set while an access request waits for approval on the peer. */

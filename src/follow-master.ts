@@ -10,6 +10,7 @@
 
 import { isDeepStrictEqual } from 'node:util'
 
+import type { MasterAccess } from './master-proxy.js'
 import {
   PeerHttpError,
   callServer,
@@ -35,7 +36,7 @@ export interface FollowHost {
   /** What this server holds now; null when the server does not expose it. */
   localSettings: () => VesselSettings | null
   /** The master to follow, or null when this server is the master or there is none. */
-  master: () => { url: string; token: string } | null
+  master: () => MasterAccess | null
   followVessel: boolean
   followMeta: boolean
   followPriorities: boolean
@@ -142,7 +143,7 @@ export class MasterFollower {
     }
     let remote: VesselSettings | null
     try {
-      remote = parseVesselSettings(await fetchVesselSettings(master.url, master.token))
+      remote = parseVesselSettings(await fetchVesselSettings(master, master.token))
     } catch (error) {
       this.host.debug(`Multihelm: vessel settings from the master: ${errorText(error)}`)
       return
@@ -252,9 +253,9 @@ export class MasterFollower {
     try {
       result =
         this.access.state === 'waiting-approval' && this.access.requestHref
-          ? await pollAccess(base, this.access.requestHref)
+          ? await pollAccess({ url: base }, this.access.requestHref)
           : await requestAccess(
-              base,
+              { url: base },
               this.accessRequestId(),
               'Multihelm: take the vessel settings over from the master',
               'admin'

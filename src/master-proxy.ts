@@ -11,7 +11,7 @@ import http from 'node:http'
 import https from 'node:https'
 
 import type { MasterResponse, MasterRouteHandle } from './api.js'
-import { ROUTE_PREFIX } from './peer-client.js'
+import { ROUTE_PREFIX, tlsOptions, type PeerAddress } from './peer-client.js'
 
 export const MASTER_ROUTE = '/master'
 const REQUEST_TIMEOUT_MS = 30_000
@@ -49,8 +49,7 @@ const FORWARDED_RESPONSE_HEADERS = [
   'vary'
 ]
 
-export interface MasterAccess {
-  url: string
+export interface MasterAccess extends PeerAddress {
   /** Empty when the master runs without security. */
   token: string
 }
@@ -225,7 +224,9 @@ export class MasterProxy {
       method: 'GET',
       headers: master.token ? { ...headers, Authorization: `Bearer ${master.token}` } : headers,
       agent: secure ? this.agents.https : this.agents.http,
-      timeout: REQUEST_TIMEOUT_MS
+      timeout: REQUEST_TIMEOUT_MS,
+      // Unlike the peer client, never lenient with a loopback master: it holds the pairing token.
+      ...(secure && master.ca !== undefined ? tlsOptions(url, master.ca) : {})
     })
     upstream.on('timeout', () => {
       upstream.destroy(new Error(`timeout after ${String(REQUEST_TIMEOUT_MS)} ms`))

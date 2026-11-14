@@ -20,7 +20,9 @@ sets by hand on one server (see `README.md`).
   tokens), one library per dataset, the paths whose metadata follows the
   master, the servers paired with this one.
 - `peer-client.ts` — HTTP to peers: hello, manifest, file with `Range`
-  resume, device access requests.
+  resume, device access requests. `locatePeer()` works out, when pairing,
+  the HTTPS address an HTTP one leads to and the certificate to trust a
+  server by that no known CA vouches for; peers keep it as `ca`.
 - `routes.ts` — readonly `hello`/`manifest`/`file` and `master/*` via
   `router.access`; admin `status`, `peers`, `paired-by`, `run`. `hello`
   notes the server asking, from its query.

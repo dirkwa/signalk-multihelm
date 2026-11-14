@@ -41,6 +41,15 @@ and Multihelm versions and why it cannot be reached. Every server also lists
 the servers paired with it, so the master shows the others; a server on an
 older Multihelm version is not listed there until it is updated.
 
+Servers with SSL on are paired the same way, by their HTTPS address or their
+HTTP one, which then leads to HTTPS. When no CA that Node knows has signed a
+server's certificate, as when Signal K made it or
+[signalk-ssl](https://github.com/dirkwa/signalk-ssl) issued it, Multihelm
+trusts the certificate the server presents when it is paired: the CA's, with
+signalk-ssl, so the server's renewed certificates are trusted as well. Should
+the certificate change for good, or a server paired over HTTP turn SSL on,
+its settings ask to pair it again.
+
 Needs Signal K server 2.31 or later: peers read the replication routes with a
 readonly device token.
 
