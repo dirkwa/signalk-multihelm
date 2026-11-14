@@ -22,6 +22,39 @@ export interface Hello {
   datasets: string[]
   /** This server is set to be the boat's master. */
   master: boolean
+  /** The Signal K server's version; older Multihelm versions leave it out. */
+  signalk?: string
+  /** Multihelm's version; older Multihelm versions leave it out. */
+  multihelm?: string
+}
+
+/**
+ * The server asking for a peer's `hello`, sent along so the peer can list
+ * the servers paired with it. Older peers ignore it.
+ */
+export interface HelloFrom {
+  serverId: string
+  name: string
+  signalk?: string
+  multihelm?: string
+}
+
+function helloQuery(from: HelloFrom | undefined): string {
+  if (!from) {
+    return ''
+  }
+  const query = new URLSearchParams({ from: from.serverId, name: from.name })
+  if (from.signalk) {
+    query.set('signalk', from.signalk)
+  }
+  if (from.multihelm) {
+    query.set('multihelm', from.multihelm)
+  }
+  return `?${query.toString()}`
+}
+
+function optionalText(value: unknown): string | undefined {
+  return typeof value === 'string' && value !== '' ? value : undefined
 }
 
 export interface Manifest {
@@ -111,12 +144,15 @@ export function normalizePeerUrl(input: string): string | null {
   return `${url.protocol}//${url.host}`
 }
 
-export async function fetchHello(base: string, token?: string): Promise<Hello> {
-  const body = (await getJson(`${base}${ROUTE_PREFIX}/hello`, token)) as Partial<Hello>
+export async function fetchHello(base: string, token?: string, from?: HelloFrom): Promise<Hello> {
+  const body = (await getJson(
+    `${base}${ROUTE_PREFIX}/hello${helloQuery(from)}`,
+    token
+  )) as Partial<Hello>
   if (typeof body.serverId !== 'string' || typeof body.protocol !== 'number') {
     throw new Error(`${base} did not answer as a Multihelm peer`)
   }
-  return {
+  const hello: Hello = {
     serverId: body.serverId,
     name: typeof body.name === 'string' ? body.name : base,
     protocol: body.protocol,
@@ -124,6 +160,13 @@ export async function fetchHello(base: string, token?: string): Promise<Hello> {
       ? body.datasets.filter((d): d is string => typeof d === 'string')
       : [],
     master: (body as { master?: unknown }).master === true
+  }
+  const signalk = optionalText(body.signalk)
+  const multihelm = optionalText(body.multihelm)
+  return {
+    ...hello,
+    ...(signalk ? { signalk } : {}),
+    ...(multihelm ? { multihelm } : {})
   }
 }
 
