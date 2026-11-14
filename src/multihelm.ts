@@ -914,14 +914,14 @@ export class Multihelm {
         `signalk-multihelm-${this.serverId}-${crypto.randomUUID().slice(0, 8)}`,
         `Multihelm on ${this.host.serverName()}`
       )
-      let peer = this.peers.find((p) => p.url === url)
-      if (!peer) {
-        // Paired over HTTP before the server went over to HTTPS.
-        peer = this.peers.find((p) => p.url === typed)
-        if (peer) {
-          this.forgetAnswers(peer.url)
-          peer.url = url
-        }
+      // Or paired over HTTP before the server went over to HTTPS.
+      let peer = this.peers.find((p) => p.url === url) ?? this.peers.find((p) => p.url === typed)
+      if (peer && result.kind === 'error') {
+        throw new Error(result.message)
+      }
+      if (peer && peer.url !== url) {
+        this.forgetAnswers(peer.url)
+        peer.url = url
       }
       if (!peer) {
         peer = { id: '', name: url, url, token: '', state: 'needs-pairing', cursors: {} }

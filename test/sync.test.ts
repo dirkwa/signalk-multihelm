@@ -708,33 +708,42 @@ describe('a server on HTTPS', () => {
     expect(bare.peerInfo()[0]?.lastError).toMatch(/certificate is not the one it had when paired/)
   })
 
-  it('keeps a working pairing as it was when pairing it again fails', async () => {
-    const hangingUp = await listen((req, res) => {
-      if (req.method === 'POST') {
-        res.socket?.destroy()
-      } else {
-        res.end('{}')
+  it.each([
+    ['cannot be asked', 'hang up'],
+    ['refuses the request', 'refuse']
+  ])(
+    'keeps a working pairing as it was when the server %s on pairing it again',
+    async (_case, answer) => {
+      const failing = await listen((req, res) => {
+        if (req.method !== 'POST') {
+          res.end('{}')
+        } else if (answer === 'hang up') {
+          res.socket?.destroy()
+        } else {
+          res.statusCode = 403
+          res.end()
+        }
+      }, selfSigned)
+      servers.push(failing.server)
+      const store = new MultihelmStore(path.join(root, `tls-kept-${answer}`))
+      const before = {
+        id: 'kept',
+        name: 'kept',
+        url: failing.url,
+        ca: pem('ca'),
+        token: 'pairing-token',
+        state: 'paired' as const,
+        cursors: {}
       }
-    }, selfSigned)
-    servers.push(hangingUp.server)
-    const store = new MultihelmStore(path.join(root, 'tls-kept'))
-    const before = {
-      id: 'kept',
-      name: 'kept',
-      url: hangingUp.url,
-      ca: pem('ca'),
-      token: 'pairing-token',
-      state: 'paired' as const,
-      cursors: {}
+      store.savePeers([before])
+      const kept = new Multihelm(store, quiet())
+      await expect(kept.pair(failing.url)).rejects.toThrow()
+      expect(kept.peerInfo()[0]).toMatchObject({ url: failing.url, state: 'paired' })
+      await kept.runRound()
+      kept.stop()
+      expect(store.loadPeers()[0]).toMatchObject({ ca: before.ca, token: before.token })
     }
-    store.savePeers([before])
-    const kept = new Multihelm(store, quiet())
-    await expect(kept.pair(hangingUp.url)).rejects.toThrow()
-    expect(kept.peerInfo()[0]).toMatchObject({ url: hangingUp.url, state: 'paired' })
-    await kept.runRound()
-    kept.stop()
-    expect(store.loadPeers()[0]).toMatchObject({ ca: before.ca, token: before.token })
-  })
+  )
 
   it('drops a hello to its HTTP address that answers after it moved to HTTPS', async () => {
     let held: ((res: http.ServerResponse) => void) | null = null

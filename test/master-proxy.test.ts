@@ -4,7 +4,7 @@ import https from 'node:https'
 import type { AddressInfo } from 'node:net'
 
 import express from 'express'
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, onTestFinished } from 'vitest'
 
 import { ROUTE_PREFIX } from '../src/peer-client.js'
 import { registerRoutes } from '../src/routes.js'
@@ -180,6 +180,10 @@ describe('MasterProxy', () => {
       }
     )
     await new Promise<void>((resolve) => secure.listen(0, '127.0.0.1', resolve))
+    onTestFinished(() => {
+      secure.closeAllConnections()
+      secure.close()
+    })
     const url = `https://127.0.0.1:${String((secure.address() as AddressInfo).port)}`
     proxy.register('/signalk/v1/api/resources/charts/')
 
@@ -192,8 +196,6 @@ describe('MasterProxy', () => {
     access = { url, token: '' }
     const unpinned = proxy.fetch('/signalk/v1/api/resources/charts/c1/1/1/1')
     await expect(unpinned).rejects.toThrow(/self-signed certificate in certificate chain/)
-    secure.closeAllConnections()
-    secure.close()
 
     expect(trusted.body.toString()).toBe('secure tile')
   })
