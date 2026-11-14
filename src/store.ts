@@ -52,6 +52,19 @@ export const OwnAccessSchema = Type.Object({
 
 export type OwnAccess = Static<typeof OwnAccessSchema>
 
+/** A server that asked this one for its `hello`, which a server does while paired with it. */
+export const PairedServerSchema = Type.Object({
+  id: Type.String(),
+  name: Type.String(),
+  signalk: Type.Optional(Type.String()),
+  multihelm: Type.Optional(Type.String()),
+  lastSeen: Type.Number()
+})
+
+export type PairedServer = Static<typeof PairedServerSchema>
+
+const PairedServersFileSchema = Type.Array(PairedServerSchema)
+
 const LibraryFileSchema = Type.Object({
   seq: Type.Integer({ minimum: 0 }),
   entries: Type.Record(Type.String(), Type.Any())
@@ -113,6 +126,15 @@ export class MultihelmStore {
 
   saveOwnAccess(access: OwnAccess): void {
     writeAtomic(path.join(this.dir, 'own-access.json'), JSON.stringify(access), 0o600)
+  }
+
+  loadPairedBy(): PairedServer[] {
+    const raw = readJson(path.join(this.dir, 'paired-by.json'))
+    return Value.Check(PairedServersFileSchema, raw) ? raw : []
+  }
+
+  savePairedBy(servers: readonly PairedServer[]): void {
+    writeAtomic(path.join(this.dir, 'paired-by.json'), JSON.stringify(servers))
   }
 
   /** A random id made once per installation: every server of a boat shares its vessel id. */

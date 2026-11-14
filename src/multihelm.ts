@@ -43,9 +43,11 @@ import {
   pollAccess,
   requestAccess,
   type AccessRequestResult,
-  type Hello
+  type Hello,
+  type HelloFrom
 } from './peer-client.js'
-import type { MultihelmStore, Peer } from './store.js'
+import type { PairedByInfo } from './status.js'
+import type { MultihelmStore, PairedServer, Peer } from './store.js'
 
 export const PROTOCOL = 1
 export const ROUND_INTERVAL_MS = 60_000
@@ -59,6 +61,10 @@ export const MASTER_CHECK_INTERVAL_MS = 30_000
  * recently, so a few missed answers do not move the role.
  */
 export const MASTER_STALE_MS = 5 * MASTER_CHECK_INTERVAL_MS
+/** Every peer asks every 30 s, so a sighting is saved only now and then. */
+const PAIRED_BY_SAVE_MS = 10 * 60_000
+/** Without security anyone may ask for `hello`; the list stays small. */
+const MAX_PAIRED_BY = 32
 /** A pairing request waiting for approval is followed this often, so an approval shows at once. */
 export const PAIRING_POLL_MS = 5_000
 /** Free space kept beyond an incoming file, as a fraction of its size. */
@@ -68,6 +74,8 @@ export interface MultihelmHost {
   serverName: () => string
   /** The user set this server to be the boat's master. */
   isMaster: () => boolean
+  /** What this server runs, for the peers to show. */
+  versions?: () => { signalk?: string; multihelm?: string }
   debug: (msg: string) => void
   error: (msg: string) => void
 }
@@ -87,6 +95,22 @@ export async function hashFile(file: string): Promise<string> {
 
 function errorText(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
+}
+
+/** Said without the address, which the panel shows anyway. */
+function helloErrorText(error: unknown): string {
+  if (!(error instanceof PeerHttpError)) {
+    return errorText(error)
+  }
+  switch (error.status) {
+    case 404:
+      return 'Multihelm is not running there'
+    case 401:
+    case 403:
+      return 'access was revoked on the peer'
+    default:
+      return `HTTP ${String(error.status)}`
+  }
 }
 
 function toListed(entry: DatasetEntry): ListedEntry {
@@ -109,6 +133,13 @@ export class Multihelm {
   private stopped = false
   /** Peer URL → when it last answered as set to be the master. */
   private readonly masterSeen = new Map<string, number>()
+  /** Peer URL → its last `hello`, and when. */
+  private readonly answers = new Map<string, { at: number; hello: Hello }>()
+  /** Peer URL → why its last `hello` failed. */
+  private readonly helloErrors = new Map<string, string>()
+  /** Server id → a server that asks this one for its `hello`. */
+  private readonly pairedBy: Map<string, PairedServer>
+  private pairedBySavedAt = 0
   private readonly roleListeners = new Set<(role: Role, master: PeerInfo | null) => void>()
   private readonly statusListeners = new Set<() => void>()
   /** What the role listeners were last told: role and master id. */
@@ -127,6 +158,7 @@ export class Multihelm {
   ) {
     this.peers = store.loadPeers()
     this.serverId = store.serverId()
+    this.pairedBy = new Map(store.loadPairedBy().map((s) => [s.id, s]))
   }
 
   start(): void {
@@ -171,7 +203,7 @@ export class Multihelm {
 
   /**
    * Asks every paired peer whether it is set to be the master. Runs outside
-   * the work queue and touches nothing but `masterSeen`, so it neither waits
+   * the work queue and touches nothing but what it keeps of the answers, so it neither waits
    * for a round nor races one.
    */
   async checkMasters(): Promise<void> {
@@ -186,14 +218,16 @@ export class Multihelm {
           .map(async (peer) => {
             let hello
             try {
-              hello = await fetchHello(peer.url, peer.token)
-            } catch {
+              hello = await fetchHello(peer.url, peer.token, this.helloFrom())
+            } catch (error) {
+              this.helloErrors.set(peer.url, helloErrorText(error))
               return // It counts until its last answer is stale.
             }
             // Unpaired or stopped meanwhile, or another server at that address now.
             if (this.stopped || !this.peers.includes(peer) || hello.serverId !== peer.id) {
               return
             }
+            this.answered(peer.url, hello)
             if (hello.master) {
               this.masterSeen.set(peer.url, Date.now())
             } else {
@@ -444,7 +478,82 @@ export class Multihelm {
       name: this.host.serverName(),
       protocol: PROTOCOL,
       datasets: this.datasetIds(),
-      master: this.host.isMaster()
+      master: this.host.isMaster(),
+      ...this.versions()
+    }
+  }
+
+  private versions(): { signalk?: string; multihelm?: string } {
+    const { signalk, multihelm } = this.host.versions?.() ?? {}
+    return { ...(signalk ? { signalk } : {}), ...(multihelm ? { multihelm } : {}) }
+  }
+
+  private helloFrom(): HelloFrom {
+    return { serverId: this.serverId, name: this.host.serverName(), ...this.versions() }
+  }
+
+  private answered(url: string, hello: Hello): void {
+    this.answers.set(url, { at: Date.now(), hello })
+    this.helloErrors.delete(url)
+  }
+
+  /**
+   * Notes a server that asked for this one's `hello`. Its last sighting is
+   * saved with any change to what it is, and otherwise once in a while.
+   */
+  sawPairedServer(from: HelloFrom): void {
+    if (from.serverId === this.serverId) {
+      return
+    }
+    const now = Date.now()
+    const known = this.pairedBy.get(from.serverId)
+    const server: PairedServer = {
+      id: from.serverId,
+      name: from.name,
+      ...(from.signalk ? { signalk: from.signalk } : {}),
+      ...(from.multihelm ? { multihelm: from.multihelm } : {}),
+      lastSeen: now
+    }
+    this.pairedBy.set(server.id, server)
+    if (this.pairedBy.size > MAX_PAIRED_BY) {
+      const oldest = [...this.pairedBy.values()].sort((x, y) => x.lastSeen - y.lastSeen)[0]
+      if (oldest) {
+        this.pairedBy.delete(oldest.id)
+      }
+    }
+    const changed =
+      !known ||
+      known.name !== server.name ||
+      known.signalk !== server.signalk ||
+      known.multihelm !== server.multihelm
+    if (changed || now - this.pairedBySavedAt >= PAIRED_BY_SAVE_MS) {
+      this.savePairedBy()
+    }
+  }
+
+  /** The servers paired with this one, by name. */
+  pairedByInfo(): PairedByInfo[] {
+    const now = Date.now()
+    return [...this.pairedBy.values()]
+      .sort((x, y) => x.name.localeCompare(y.name))
+      .map((s) => ({ ...s, online: now - s.lastSeen <= MASTER_STALE_MS }))
+  }
+
+  /** Drops a server from that list; it comes back when it asks again. */
+  forgetPairedBy(id: string): boolean {
+    const removed = this.pairedBy.delete(id)
+    if (removed) {
+      this.savePairedBy()
+    }
+    return removed
+  }
+
+  private savePairedBy(): void {
+    this.pairedBySavedAt = Date.now()
+    try {
+      this.store.savePairedBy([...this.pairedBy.values()])
+    } catch (error) {
+      this.host.error(`Multihelm: saving the servers paired with this one: ${errorText(error)}`)
     }
   }
 
@@ -673,8 +782,26 @@ export class Multihelm {
     if (p.lastError !== undefined) {
       info.lastError = p.lastError
     }
+    const now = Date.now()
+    const answer = this.answers.get(p.url)
+    if (answer) {
+      info.lastSeen = Math.max(info.lastSeen ?? 0, answer.at)
+      if (answer.hello.signalk) {
+        info.signalk = answer.hello.signalk
+      }
+      if (answer.hello.multihelm) {
+        info.multihelm = answer.hello.multihelm
+      }
+    }
+    const helloError = this.helloErrors.get(p.url)
+    if (helloError !== undefined && p.state === 'paired') {
+      info.lastError = helloError
+    }
+    if (p.state === 'paired') {
+      info.online = info.lastSeen !== undefined && now - info.lastSeen <= MASTER_STALE_MS
+    }
     const seen = this.masterSeen.get(p.url)
-    if (seen !== undefined && Date.now() - seen <= MASTER_STALE_MS) {
+    if (seen !== undefined && now - seen <= MASTER_STALE_MS) {
       info.master = true
     }
     return info
@@ -721,6 +848,8 @@ export class Multihelm {
       const before = this.peers.length
       this.peers = this.peers.filter((p) => p.url !== url)
       this.masterSeen.delete(url)
+      this.answers.delete(url)
+      this.helloErrors.delete(url)
       this.store.savePeers(this.peers)
       this.announceRole()
       return Promise.resolve(this.peers.length !== before)
@@ -773,7 +902,7 @@ export class Multihelm {
 
   private async helloLocked(peer: Peer): Promise<void> {
     try {
-      const hello = await fetchHello(peer.url, peer.token)
+      const hello = await fetchHello(peer.url, peer.token, this.helloFrom())
       if (hello.serverId === this.serverId) {
         peer.state = 'needs-pairing'
         peer.lastError = 'this is this server itself'
@@ -782,16 +911,15 @@ export class Multihelm {
       peer.id = hello.serverId
       peer.name = hello.name
       peer.lastSeen = Date.now()
+      this.answered(peer.url, hello)
       if (hello.master) {
         this.masterSeen.set(peer.url, peer.lastSeen)
       } else {
         this.masterSeen.delete(peer.url)
       }
     } catch (error) {
-      peer.lastError =
-        error instanceof PeerHttpError && error.status === 404
-          ? 'Multihelm is not running there'
-          : errorText(error)
+      peer.lastError = helloErrorText(error)
+      this.helloErrors.set(peer.url, peer.lastError)
     }
   }
 }

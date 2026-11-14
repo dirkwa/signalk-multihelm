@@ -9,7 +9,11 @@ export interface Notice {
   text: string
 }
 
-export function roleNotice(status: Status): Notice {
+function servers(n: number): string {
+  return n === 1 ? '1 server' : `${String(n)} servers`
+}
+
+export function roleNotice(status: Status, now: number): Notice {
   if (!status.running) {
     return { tone: 'danger', text: 'Multihelm is not running. Enable it above.' }
   }
@@ -20,12 +24,31 @@ export function roleNotice(status: Status): Notice {
     }
   }
   if (status.role === 'master') {
-    return { tone: 'info', text: "This server is the boat's master." }
+    const paired = status.pairedBy.length
+    const online = status.pairedBy.filter((s) => s.online).length
+    return {
+      tone: 'info',
+      text:
+        paired === 0
+          ? "This server is the boat's master. No other server is paired with it yet."
+          : `This server is the boat's master. ${String(online)} of the ${servers(paired)} paired with it ${online === 1 ? 'is' : 'are'} online.`
+    }
   }
   if (status.master) {
-    return { tone: 'success', text: `The boat's master is ${status.master.name}.` }
+    return {
+      tone: 'success',
+      text: `The boat's master is ${status.master.name}; it answered ${ago(status.master.lastSeen, now)}.`
+    }
   }
-  if (!status.peers.some((p) => p.state === 'paired')) {
+  const paired = status.peers.filter((p) => p.state === 'paired')
+  const offline = paired.filter((p) => p.online === false)
+  if (offline.length > 0) {
+    return {
+      tone: 'danger',
+      text: `No master found: ${offline.map((p) => p.name).join(', ')} ${offline.length === 1 ? 'is' : 'are'} not reachable.`
+    }
+  }
+  if (paired.length === 0) {
     return {
       tone: 'warning',
       text: "No master found: this server is not paired yet. Pair it with the server set to be the boat's master below."
@@ -57,6 +80,15 @@ export function peerName(peer: PeerInfo, discovered: DiscoveredServer[]): string
 /** Approves an access request on the server the admin UI runs on. */
 export function approveAccessUrl(request: string): string {
   return `/skServer/security/access/requests/${encodeURIComponent(request)}/approved`
+}
+
+export function versionText(server: { signalk?: string; multihelm?: string }): string {
+  return [
+    server.signalk && `Signal K ${server.signalk}`,
+    server.multihelm && `Multihelm ${server.multihelm}`
+  ]
+    .filter(Boolean)
+    .join(' · ')
 }
 
 export function accessRequestsUrl(serverUrl: string): string {
