@@ -9,11 +9,11 @@ import os from 'node:os'
 import path from 'node:path'
 
 import express from 'express'
-import { afterAll, beforeAll, describe, expect, it } from 'vitest'
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 
 import type { DatasetDefinition, DatasetEntry, DatasetHandle } from '../src/api.js'
 import { SETTLE_MS } from '../src/library.js'
-import { Multihelm, type MultihelmHost } from '../src/multihelm.js'
+import { MASTER_STALE_MS, Multihelm, type MultihelmHost } from '../src/multihelm.js'
 import { downloadFile, ROUTE_PREFIX } from '../src/peer-client.js'
 import { registerRoutes } from '../src/routes.js'
 import { MultihelmStore } from '../src/store.js'
@@ -469,29 +469,49 @@ describe('the overview of the servers', () => {
   })
 
   it('keeps the list across a restart, and forgets a server on request', () => {
-    const again = new Multihelm(
-      new MultihelmStore(path.join(root, 'overview-master', 'data')),
-      quiet()
-    )
-    expect(again.pairedByInfo().map((s) => s.name)).toEqual(['overview-member'])
-    expect(again.forgetPairedBy(b.mh.serverId)).toBe(true)
-    expect(again.pairedByInfo()).toEqual([])
+    const dir = path.join(root, 'overview-restart')
+    new Multihelm(new MultihelmStore(dir), quiet()).sawPairedServer({
+      serverId: 'nav-id',
+      name: 'nav',
+      signalk: '2.37.0'
+    })
+    const again = new Multihelm(new MultihelmStore(dir), quiet())
+    expect(again.pairedByInfo()).toMatchObject([{ id: 'nav-id', name: 'nav', signalk: '2.37.0' }])
+    expect(again.forgetPairedBy('nav-id')).toBe(true)
+    expect(new Multihelm(new MultihelmStore(dir), quiet()).pairedByInfo()).toEqual([])
   })
 
-  it('says why a paired server cannot be reached', async () => {
+  it('counts a paired server that stopped answering as offline and says why, until it answers', async () => {
+    let up = true
     const { server, url } = await listen((req, res) => {
       if (req.method === 'POST') {
         res.statusCode = 404
         res.end('{}')
         return
       }
+      res.statusCode = up ? 200 : 503
       res.end(JSON.stringify({ serverId: 'gone-id', name: 'gone', protocol: 1 }))
     })
     const mh = new Multihelm(new MultihelmStore(path.join(root, 'unreachable')), quiet())
     await mh.pair(url)
-    server.close()
-    await mh.checkMasters()
-    expect(mh.peerInfo()[0]).toMatchObject({ state: 'paired', online: true })
-    expect(mh.peerInfo()[0]?.lastError).toMatch(/ECONNREFUSED|fetch failed|socket/i)
+    up = false
+    vi.useFakeTimers({ toFake: ['Date'] })
+    try {
+      vi.setSystemTime(Date.now() + MASTER_STALE_MS + 1_000)
+      await mh.runRound()
+      expect(mh.peerInfo()[0]).toMatchObject({
+        state: 'paired',
+        online: false,
+        lastError: 'HTTP 503'
+      })
+
+      up = true
+      await mh.checkMasters()
+      expect(mh.peerInfo()[0]).toMatchObject({ online: true })
+      expect(mh.peerInfo()[0]?.lastError).toBeUndefined()
+    } finally {
+      vi.useRealTimers()
+      server.close()
+    }
   })
 })
