@@ -37,6 +37,7 @@ import {
 import type { MasterAccess } from './master-proxy.js'
 import {
   PeerHttpError,
+  UNTRUSTED_ISSUER,
   downloadFile,
   fetchHello,
   fetchManifest,
@@ -103,11 +104,7 @@ function errorText(error: unknown): string {
 
 /** What Node calls a certificate chain that does not lead to a certificate it trusts. */
 const UNTRUSTED_CERTIFICATE = new Set([
-  'DEPTH_ZERO_SELF_SIGNED_CERT',
-  'SELF_SIGNED_CERT_IN_CHAIN',
-  'UNABLE_TO_VERIFY_LEAF_SIGNATURE',
-  'UNABLE_TO_GET_ISSUER_CERT',
-  'UNABLE_TO_GET_ISSUER_CERT_LOCALLY',
+  ...UNTRUSTED_ISSUER,
   'CERT_SIGNATURE_FAILURE',
   'CERT_UNTRUSTED',
   'CERT_REJECTED'
@@ -273,24 +270,28 @@ export class Multihelm {
         this.peers
           .filter((p) => p.state === 'paired' && p.id !== '')
           .map(async (peer) => {
+            const { url, ca } = peer
+            // Unpaired or stopped meanwhile, or paired again at another address or by another certificate.
+            const current = (): boolean =>
+              !this.stopped && this.peers.includes(peer) && peer.url === url && peer.ca === ca
             let hello
             try {
               hello = await fetchHello(peer, peer.token, this.helloFrom())
             } catch (error) {
-              if (!this.stopped && this.peers.includes(peer)) {
-                this.helloErrors.set(peer.url, helloErrorText(error))
+              if (current()) {
+                this.helloErrors.set(url, helloErrorText(error))
               }
               return // It counts until its last answer is stale.
             }
-            // Unpaired or stopped meanwhile, or another server at that address now.
-            if (this.stopped || !this.peers.includes(peer) || hello.serverId !== peer.id) {
+            // Or another server at that address now.
+            if (!current() || hello.serverId !== peer.id) {
               return
             }
-            this.answered(peer.url, hello)
+            this.answered(url, hello)
             if (hello.master) {
-              this.masterSeen.set(peer.url, Date.now())
+              this.masterSeen.set(url, Date.now())
             } else {
-              this.masterSeen.delete(peer.url)
+              this.masterSeen.delete(url)
             }
           })
       )
@@ -907,6 +908,12 @@ export class Multihelm {
       }
       const address = await locatePeer(typed)
       const url = address.url
+      // Asked before anything of a pairing changes, so one that works stays as it is if asking fails.
+      const result = await requestAccess(
+        address,
+        `signalk-multihelm-${this.serverId}-${crypto.randomUUID().slice(0, 8)}`,
+        `Multihelm on ${this.host.serverName()}`
+      )
       let peer = this.peers.find((p) => p.url === url)
       if (!peer) {
         // Paired over HTTP before the server went over to HTTPS.
@@ -925,11 +932,6 @@ export class Multihelm {
       } else {
         peer.ca = address.ca
       }
-      const result = await requestAccess(
-        address,
-        `signalk-multihelm-${this.serverId}-${crypto.randomUUID().slice(0, 8)}`,
-        `Multihelm on ${this.host.serverName()}`
-      )
       this.applyAccessResult(peer, result)
       if (peer.state === 'paired') {
         await this.helloLocked(peer)
@@ -1026,6 +1028,10 @@ export class Multihelm {
       }
     } catch (error) {
       this.helloErrors.set(peer.url, helloErrorText(error))
+      if (needsPairingAgain(error)) {
+        peer.state = 'needs-pairing'
+        peer.lastError = connectionText(error) ?? errorText(error)
+      }
     }
   }
 }

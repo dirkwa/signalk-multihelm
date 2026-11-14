@@ -688,6 +688,83 @@ describe('a server on HTTPS', () => {
     expect(read(a.dataset.dir, 'moved', 'data')).toBe('before the move')
   })
 
+  it('asks to be paired again once its certificate changed, with no dataset to sync', async () => {
+    const store = new MultihelmStore(path.join(root, 'tls-bare'))
+    store.savePeers([
+      {
+        id: b.mh.serverId,
+        name: 'tls-b',
+        url: b.url,
+        ca: pem('self-signed'),
+        token: '',
+        state: 'paired',
+        cursors: {}
+      }
+    ])
+    const bare = new Multihelm(store, quiet())
+    await bare.runRound()
+    bare.stop()
+    expect(bare.peerInfo()[0]?.state).toBe('needs-pairing')
+    expect(bare.peerInfo()[0]?.lastError).toMatch(/certificate is not the one it had when paired/)
+  })
+
+  it('keeps a working pairing as it was when pairing it again fails', async () => {
+    const hangingUp = await listen((req, res) => {
+      if (req.method === 'POST') {
+        res.socket?.destroy()
+      } else {
+        res.end('{}')
+      }
+    }, selfSigned)
+    servers.push(hangingUp.server)
+    const store = new MultihelmStore(path.join(root, 'tls-kept'))
+    const before = {
+      id: 'kept',
+      name: 'kept',
+      url: hangingUp.url,
+      ca: pem('ca'),
+      token: 'pairing-token',
+      state: 'paired' as const,
+      cursors: {}
+    }
+    store.savePeers([before])
+    const kept = new Multihelm(store, quiet())
+    await expect(kept.pair(hangingUp.url)).rejects.toThrow()
+    expect(kept.peerInfo()[0]).toMatchObject({ url: hangingUp.url, state: 'paired' })
+    await kept.runRound()
+    kept.stop()
+    expect(store.loadPeers()[0]).toMatchObject({ ca: before.ca, token: before.token })
+  })
+
+  it('drops a hello to its HTTP address that answers after it moved to HTTPS', async () => {
+    let held: ((res: http.ServerResponse) => void) | null = null
+    const heldArrived = new Promise<http.ServerResponse>((resolve) => {
+      held = resolve
+    })
+    const port = new URL(b.url).port
+    const old = await listen((req, res) => {
+      if ((req.url ?? '').startsWith(`${ROUTE_PREFIX}/hello`)) {
+        held?.(res)
+      } else {
+        redirectTo('127.0.0.1', port)(req, res)
+      }
+    })
+    servers.push(old.server)
+    const store = new MultihelmStore(path.join(root, 'tls-race'))
+    store.savePeers([
+      { id: b.mh.serverId, name: 'tls-b', url: old.url, token: '', state: 'paired', cursors: {} }
+    ])
+    const racing = new Multihelm(store, quiet())
+    const checking = racing.checkMasters()
+    const stale = await heldArrived
+    await racing.pair(old.url)
+    redirectTo('127.0.0.1', port)({ url: '/', headers: {} } as http.IncomingMessage, stale)
+    await checking
+    racing.stop()
+    expect(racing.peerInfo()[0]).toMatchObject({ url: b.url, state: 'paired' })
+    expect(racing.peerInfo()[0]?.lastError).toBeUndefined()
+  })
+
   it('does not follow a redirect to another host', async () => {
     const a = await member('tls-elsewhere')
     const elsewhere = await listen(redirectTo('elsewhere.invalid', '3443'))

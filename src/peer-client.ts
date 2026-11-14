@@ -19,6 +19,19 @@ import tls from 'node:tls'
 export const ROUTE_PREFIX = '/plugins/signalk-multihelm'
 const REQUEST_TIMEOUT_MS = 30_000
 
+/**
+ * What Node calls a chain whose issuer it does not trust, the one failure a
+ * certificate kept from pairing stands in for. Expiry and a name it was not
+ * issued for are not among them: pinning must not paper over those.
+ */
+export const UNTRUSTED_ISSUER: ReadonlySet<string> = new Set([
+  'DEPTH_ZERO_SELF_SIGNED_CERT',
+  'SELF_SIGNED_CERT_IN_CHAIN',
+  'UNABLE_TO_VERIFY_LEAF_SIGNATURE',
+  'UNABLE_TO_GET_ISSUER_CERT',
+  'UNABLE_TO_GET_ISSUER_CERT_LOCALLY'
+])
+
 /** Where a peer is, and how to trust it over HTTPS. */
 export interface PeerAddress {
   url: string
@@ -256,16 +269,15 @@ async function speaksTls(target: URL): Promise<boolean> {
 }
 
 /**
- * The top certificate of the chain `target` presents, as PEM; undefined when
- * Node trusts the chain as it is, or would but for the names it was issued
- * for, which are then the ones to pair by.
+ * The top certificate of the chain `target` presents, as PEM, when Node
+ * refuses the chain for its issuer alone; undefined otherwise.
  */
 async function untrustedAnchor(target: URL): Promise<string | undefined> {
   const socket = await connectTls(target)
   try {
     // Node sets it to the error's code, though it is typed as the error.
     const reason = String(socket.authorizationError)
-    if (socket.authorized || reason === 'ERR_TLS_CERT_ALTNAME_INVALID') {
+    if (socket.authorized || !UNTRUSTED_ISSUER.has(reason)) {
       return undefined
     }
     let top = socket.getPeerCertificate(true)

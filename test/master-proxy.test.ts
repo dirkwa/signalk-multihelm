@@ -188,6 +188,10 @@ describe('MasterProxy', () => {
     access = { url, token: '', ca: pem('self-signed') }
     const other = proxy.fetch('/signalk/v1/api/resources/charts/c1/1/1/1')
     await expect(other).rejects.toThrow(/self-signed certificate in certificate chain/)
+    // Over loopback too, the token goes only where the certificate checks out.
+    access = { url, token: '' }
+    const unpinned = proxy.fetch('/signalk/v1/api/resources/charts/c1/1/1/1')
+    await expect(unpinned).rejects.toThrow(/self-signed certificate in certificate chain/)
     secure.closeAllConnections()
     secure.close()
 
