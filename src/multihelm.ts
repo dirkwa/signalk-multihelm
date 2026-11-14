@@ -220,7 +220,9 @@ export class Multihelm {
             try {
               hello = await fetchHello(peer.url, peer.token, this.helloFrom())
             } catch (error) {
-              this.helloErrors.set(peer.url, helloErrorText(error))
+              if (!this.stopped && this.peers.includes(peer)) {
+                this.helloErrors.set(peer.url, helloErrorText(error))
+              }
               return // It counts until its last answer is stale.
             }
             // Unpaired or stopped meanwhile, or another server at that address now.

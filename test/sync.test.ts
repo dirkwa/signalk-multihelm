@@ -481,6 +481,34 @@ describe('the overview of the servers', () => {
     expect(new Multihelm(new MultihelmStore(dir), quiet()).pairedByInfo()).toEqual([])
   })
 
+  it('takes no error over from a pairing removed while its hello was under way', async () => {
+    let slowFailure = false
+    const { server, url } = await listen((req, res) => {
+      if (req.method === 'POST') {
+        res.statusCode = 404
+        res.end('{}')
+      } else if (slowFailure) {
+        slowFailure = false
+        setTimeout(() => {
+          res.statusCode = 503
+          res.end('{}')
+        }, 200)
+      } else {
+        res.end(JSON.stringify({ serverId: 'again-id', name: 'again', protocol: 1 }))
+      }
+    })
+    const mh = new Multihelm(new MultihelmStore(path.join(root, 'repaired')), quiet())
+    await mh.pair(url)
+    slowFailure = true
+    const checking = mh.checkMasters()
+    await mh.unpair(url)
+    await mh.pair(url)
+    await checking
+    server.close()
+    expect(mh.peerInfo()[0]).toMatchObject({ state: 'paired', online: true })
+    expect(mh.peerInfo()[0]?.lastError).toBeUndefined()
+  })
+
   it('counts a paired server that stopped answering as offline and says why, until it answers', async () => {
     let up = true
     const { server, url } = await listen((req, res) => {
