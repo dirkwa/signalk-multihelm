@@ -261,4 +261,22 @@ describe('MasterFollower', () => {
     expect(priorityWrites()).toBe(2)
     masterAnswer = masterSettings
   })
+
+  it('writes the priorities again after a change here, once this server had kept them as written', async () => {
+    masterAnswer = { ...masterSettings, priorities: masterPriorities }
+    const empty = { groups: [], overrides: {}, defaults: {} }
+    local = { vessel: masterSettings.vessel, meta: masterSettings.meta, priorities: empty }
+    const f = follower('priorities-kept-as-written')
+    const priorityWrites = (): number =>
+      calls.filter((c) => c.method === 'PUT' && c.url === '/skServer/priorities').length
+
+    calls.length = 0
+    await f.run()
+    local = { ...local, priorities: structuredClone(masterPriorities) }
+    await f.run()
+    local = { ...local, priorities: empty }
+    await f.run()
+    expect(priorityWrites()).toBe(2)
+    masterAnswer = masterSettings
+  })
 })

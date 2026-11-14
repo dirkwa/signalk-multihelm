@@ -141,7 +141,11 @@ export class MasterFollower {
     remote: SourcePriorities | undefined,
     local: SourcePriorities | undefined
   ): SourcePriorities | null {
-    if (!remote || !hasPriorities(remote) || !local || isDeepStrictEqual(remote, local)) {
+    if (!remote || !hasPriorities(remote) || !local) {
+      return null
+    }
+    if (isDeepStrictEqual(remote, local)) {
+      this.prioritiesWritten = null
       return null
     }
     const written = this.prioritiesWritten
