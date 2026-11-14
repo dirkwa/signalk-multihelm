@@ -63,6 +63,8 @@ export const MASTER_CHECK_INTERVAL_MS = 30_000
 export const MASTER_STALE_MS = 5 * MASTER_CHECK_INTERVAL_MS
 /** Every peer asks every 30 s, so a sighting is saved only now and then. */
 const PAIRED_BY_SAVE_MS = 10 * 60_000
+/** Without security anyone may ask, so writes of that list are gathered, never one per request. */
+const PAIRED_BY_FLUSH_MS = 10_000
 /** Without security anyone may ask for `hello`; the list stays small. */
 const MAX_PAIRED_BY = 32
 /** A pairing request waiting for approval is followed this often, so an approval shows at once. */
@@ -140,6 +142,7 @@ export class Multihelm {
   /** Server id → a server that asks this one for its `hello`. */
   private readonly pairedBy: Map<string, PairedServer>
   private pairedBySavedAt = 0
+  private pairedByTimer: NodeJS.Timeout | null = null
   private readonly roleListeners = new Set<(role: Role, master: PeerInfo | null) => void>()
   private readonly statusListeners = new Set<() => void>()
   /** What the role listeners were last told: role and master id. */
@@ -199,6 +202,11 @@ export class Multihelm {
     }
     this.masterTimer = null
     this.pairingTimer = null
+    if (this.pairedByTimer) {
+      clearTimeout(this.pairedByTimer)
+      this.pairedByTimer = null
+      this.savePairedBy()
+    }
   }
 
   /**
@@ -529,7 +537,7 @@ export class Multihelm {
       known.signalk !== server.signalk ||
       known.multihelm !== server.multihelm
     if (changed || now - this.pairedBySavedAt >= PAIRED_BY_SAVE_MS) {
-      this.savePairedBy()
+      this.savePairedBySoon()
     }
   }
 
@@ -548,6 +556,17 @@ export class Multihelm {
       this.savePairedBy()
     }
     return removed
+  }
+
+  private savePairedBySoon(): void {
+    if (this.pairedByTimer) {
+      return
+    }
+    this.pairedByTimer = setTimeout(() => {
+      this.pairedByTimer = null
+      this.savePairedBy()
+    }, PAIRED_BY_FLUSH_MS)
+    this.pairedByTimer.unref()
   }
 
   private savePairedBy(): void {
@@ -616,6 +635,9 @@ export class Multihelm {
       manifest = await fetchManifest(peer.url, peer.token, id, peer.cursors[id] ?? 0)
     } catch (error) {
       if (error instanceof PeerHttpError && error.status === 404) {
+        if (peer.lastError?.startsWith(`${id}:`)) {
+          delete peer.lastError
+        }
         return // The peer does not have this dataset.
       }
       throw error
