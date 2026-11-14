@@ -236,4 +236,29 @@ describe('MasterFollower', () => {
     expect(calls).toEqual([])
     masterAnswer = masterSettings
   })
+
+  it('writes the priorities once when this server keeps them differently, again once they change here', async () => {
+    masterAnswer = { ...masterSettings, priorities: masterPriorities }
+    const kept = { ...masterPriorities, defaults: {} }
+    local = {
+      vessel: masterSettings.vessel,
+      meta: masterSettings.meta,
+      priorities: { groups: [], overrides: {}, defaults: {} }
+    }
+    const f = follower('priorities-kept-differently')
+    const priorityWrites = (): number =>
+      calls.filter((c) => c.method === 'PUT' && c.url === '/skServer/priorities').length
+
+    calls.length = 0
+    await f.run()
+    local = { ...local, priorities: kept }
+    await f.run()
+    await f.run()
+    expect(priorityWrites()).toBe(1)
+
+    local = { ...local, priorities: { groups: [], overrides: {}, defaults: {} } }
+    await f.run()
+    expect(priorityWrites()).toBe(2)
+    masterAnswer = masterSettings
+  })
 })

@@ -58,6 +58,13 @@ function metaUrl(base: string, path: string): string {
 
 export class MasterFollower {
   private access: OwnAccess
+  /**
+   * The master's priorities last written here and what this server kept of
+   * them, seen a round later: should it keep them differently, they are not
+   * written again until the master's or this server's change.
+   */
+  private prioritiesWritten: { target: SourcePriorities; kept: SourcePriorities | null } | null =
+    null
 
   constructor(private readonly host: FollowHost) {
     this.access = host.store.loadOwnAccess()
@@ -97,14 +104,9 @@ export class MasterFollower {
           (p) => !isDeepStrictEqual(remote.meta[p], local.meta[p])
         )
       : []
-    const priorities =
-      followPriorities &&
-      remote.priorities !== undefined &&
-      hasPriorities(remote.priorities) &&
-      local.priorities !== undefined &&
-      !isDeepStrictEqual(remote.priorities, local.priorities)
-        ? remote.priorities
-        : null
+    const priorities = followPriorities
+      ? this.prioritiesToWrite(remote.priorities, local.priorities)
+      : null
     if (!vesselChanged && metaChanged.length === 0 && !priorities) {
       return
     }
@@ -125,6 +127,7 @@ export class MasterFollower {
       }
       if (priorities) {
         await callServer('PUT', `${base}/skServer/priorities`, token, priorities)
+        this.prioritiesWritten = { target: priorities, kept: null }
       }
     } catch (error) {
       if (error instanceof PeerHttpError && (error.status === 401 || error.status === 403)) {
@@ -132,6 +135,26 @@ export class MasterFollower {
       }
       this.host.error(`Multihelm: taking over the master's vessel settings: ${errorText(error)}`)
     }
+  }
+
+  private prioritiesToWrite(
+    remote: SourcePriorities | undefined,
+    local: SourcePriorities | undefined
+  ): SourcePriorities | null {
+    if (!remote || !hasPriorities(remote) || !local || isDeepStrictEqual(remote, local)) {
+      return null
+    }
+    const written = this.prioritiesWritten
+    if (written && isDeepStrictEqual(written.target, remote)) {
+      if (written.kept === null) {
+        written.kept = local
+        return null
+      }
+      if (isDeepStrictEqual(written.kept, local)) {
+        return null
+      }
+    }
+    return remote
   }
 
   /** The vessel route writes every field, so the ones that stay here are sent back as they are. */
