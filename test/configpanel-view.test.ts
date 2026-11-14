@@ -41,11 +41,12 @@ const helm: PeerInfo = {
 
 describe('the configuration panel', () => {
   it('asks to pair while there is no peer, and names the master once there is one', () => {
-    expect(roleNotice(status(), now)).toMatchObject({ tone: 'warning', text: /not paired yet/ })
-    expect(roleNotice(status({ peers: [helm] }), now)).toMatchObject({
-      tone: 'warning',
-      text: /none of the paired servers/
-    })
+    const unpaired = roleNotice(status(), now)
+    expect(unpaired.tone).toBe('warning')
+    expect(unpaired.text).toMatch(/not paired yet/)
+    const noMaster = roleNotice(status({ peers: [helm] }), now)
+    expect(noMaster.tone).toBe('warning')
+    expect(noMaster.text).toMatch(/none of the paired servers/)
     expect(roleNotice(status({ peers: [helm], master: helm }), now)).toEqual({
       tone: 'success',
       text: "The boat's master is helm; it answered 12 s ago."

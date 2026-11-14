@@ -470,15 +470,26 @@ describe('the overview of the servers', () => {
 
   it('keeps the list across a restart, and forgets a server on request', () => {
     const dir = path.join(root, 'overview-restart')
-    new Multihelm(new MultihelmStore(dir), quiet()).sawPairedServer({
-      serverId: 'nav-id',
-      name: 'nav',
-      signalk: '2.37.0'
-    })
+    const before = new Multihelm(new MultihelmStore(dir), quiet())
+    before.sawPairedServer({ serverId: 'nav-id', name: 'nav', signalk: '2.37.0' })
+    before.stop()
     const again = new Multihelm(new MultihelmStore(dir), quiet())
     expect(again.pairedByInfo()).toMatchObject([{ id: 'nav-id', name: 'nav', signalk: '2.37.0' }])
     expect(again.forgetPairedBy('nav-id')).toBe(true)
     expect(new Multihelm(new MultihelmStore(dir), quiet()).pairedByInfo()).toEqual([])
+  })
+
+  it('gathers the writes of that list, however many servers ask', () => {
+    const store = new MultihelmStore(path.join(root, 'overview-flood'))
+    const save = vi.spyOn(store, 'savePairedBy')
+    const mh = new Multihelm(store, quiet())
+    for (let i = 0; i < 50; i++) {
+      mh.sawPairedServer({ serverId: `asker-${String(i)}`, name: `asker ${String(i)}` })
+    }
+    expect(save).not.toHaveBeenCalled()
+    mh.stop()
+    expect(save).toHaveBeenCalledTimes(1)
+    expect(mh.pairedByInfo()).toHaveLength(32)
   })
 
   it('takes no error over from a pairing removed while its hello was under way', async () => {
