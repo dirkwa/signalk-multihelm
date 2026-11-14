@@ -30,52 +30,69 @@ function isText(value: unknown): value is string {
   return typeof value === 'string' && value !== ''
 }
 
-function group(value: unknown): PriorityGroup[] {
-  if (!isRecord(value) || !isText(value.id) || !Array.isArray(value.sources)) {
-    return []
+function group(value: unknown): PriorityGroup | null {
+  if (
+    !isRecord(value) ||
+    !isText(value.id) ||
+    !Array.isArray(value.sources) ||
+    !(value.sources as unknown[]).every(isText) ||
+    (value.inactive !== undefined && typeof value.inactive !== 'boolean')
+  ) {
+    return null
   }
-  const sources = (value.sources as unknown[]).filter(isText)
-  return [
-    typeof value.inactive === 'boolean'
-      ? { id: value.id, sources, inactive: value.inactive }
-      : { id: value.id, sources }
-  ]
+  const sources = value.sources as string[]
+  return value.inactive === undefined
+    ? { id: value.id, sources }
+    : { id: value.id, sources, inactive: value.inactive }
 }
 
 /** The server takes a timeout as an integer or a string of one, and keeps a number. */
-function entry(value: unknown): PriorityEntry[] {
+function entry(value: unknown): PriorityEntry | null {
   if (!isRecord(value) || !isText(value.sourceRef)) {
-    return []
+    return null
   }
   const timeout =
     typeof value.timeout === 'string' && /^-?\d+$/.test(value.timeout)
       ? Number(value.timeout)
       : value.timeout
   return typeof timeout === 'number' && Number.isInteger(timeout)
-    ? [{ sourceRef: value.sourceRef, timeout }]
-    : []
+    ? { sourceRef: value.sourceRef, timeout }
+    : null
 }
 
-/** Kept to the shape above, anything else dropped; null when it is no priorities at all. */
+function allOrNull<T>(items: unknown[], parse: (item: unknown) => T | null): T[] | null {
+  const parsed = items.map(parse)
+  return parsed.every((item) => item !== null) ? parsed : null
+}
+
+/**
+ * Null unless every part has the shape above: a priorities list cut short
+ * would replace a server's whole set with less than the master meant.
+ */
 export function parseSourcePriorities(raw: unknown): SourcePriorities | null {
   if (!isRecord(raw) || !Array.isArray(raw.groups) || !isRecord(raw.overrides)) {
     return null
   }
+  const groups = allOrNull(raw.groups as unknown[], group)
   const overrides: Record<string, PriorityEntry[]> = {}
   for (const [path, list] of Object.entries(raw.overrides)) {
-    if (Array.isArray(list)) {
-      overrides[path] = (list as unknown[]).flatMap(entry)
+    const entries = Array.isArray(list) ? allOrNull(list as unknown[], entry) : null
+    if (!entries) {
+      return null
     }
+    overrides[path] = entries
   }
-  const fallbackMs = isRecord(raw.defaults) ? raw.defaults.fallbackMs : undefined
-  return {
-    groups: (raw.groups as unknown[]).flatMap(group),
-    overrides,
-    defaults:
-      typeof fallbackMs === 'number' && fallbackMs > 0 && Number.isFinite(fallbackMs)
-        ? { fallbackMs }
-        : {}
+  const defaults = raw.defaults ?? {}
+  if (!groups || !isRecord(defaults)) {
+    return null
   }
+  const { fallbackMs } = defaults
+  if (fallbackMs === undefined) {
+    return { groups, overrides, defaults: {} }
+  }
+  return typeof fallbackMs === 'number' && fallbackMs > 0 && Number.isFinite(fallbackMs)
+    ? { groups, overrides, defaults: { fallbackMs } }
+    : null
 }
 
 /** What this server holds in its settings, read the way `/skServer/priorities` answers. */
