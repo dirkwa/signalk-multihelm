@@ -94,12 +94,19 @@ export class MasterFollower {
   private access: OwnAccess
   private readonly prioritiesWritten = new WrittenValues()
   private readonly metaWritten = new WrittenValues()
-  /** The paths whose metadata came from the master: theirs go when the master's do. */
+  /**
+   * The paths whose metadata is the master's: all it has, and the ones it
+   * had until they are gone here too.
+   */
   private followedMeta: Set<string>
+  /** The list as last saved; a failed save is tried again the next round. */
+  private followedMetaSaved: string
 
   constructor(private readonly host: FollowHost) {
     this.access = host.store.loadOwnAccess()
-    this.followedMeta = new Set(host.store.loadFollowedMeta())
+    const followed = host.store.loadFollowedMeta()
+    this.followedMeta = new Set(followed)
+    this.followedMetaSaved = JSON.stringify(followed.sort())
   }
 
   /** Whether the user has to approve this server's own access request. */
@@ -131,13 +138,21 @@ export class MasterFollower {
     }
     const vesselChanged =
       followVessel && VESSEL_FIELDS.some((k) => remote.vessel[k] !== local.vessel[k])
-    const metaChanged = followMeta ? this.metaToWrite(remote.meta, local.meta) : []
+    if (followMeta) {
+      this.followedMeta = new Set([
+        ...Object.keys(remote.meta),
+        ...[...this.followedMeta].filter((p) => local.meta[p] !== undefined)
+      ])
+    }
+    const metaChanged = followMeta
+      ? [...this.followedMeta].filter((p) => this.metaWritten.due(p, remote.meta[p], local.meta[p]))
+      : []
     const priorities = followPriorities
       ? this.prioritiesToWrite(remote.priorities, local.priorities)
       : null
     if (!vesselChanged && metaChanged.length === 0 && !priorities) {
       if (followMeta) {
-        this.setFollowedMeta(new Set(Object.keys(remote.meta)))
+        this.saveFollowedMeta()
       }
       return
     }
@@ -146,8 +161,6 @@ export class MasterFollower {
       return
     }
     const base = this.host.ownUrl()
-    // What was written counts even when a later write fails.
-    let followed = new Set(this.followedMeta)
     try {
       if (vesselChanged) {
         await this.writeVessel(base, token, remote.vessel)
@@ -159,12 +172,9 @@ export class MasterFollower {
           : callServer('PUT', metaUrl(base, path), token, { value }))
         this.metaWritten.wrote(path, value)
         if (value === undefined) {
-          followed.delete(path)
-        } else {
-          followed.add(path)
+          this.followedMeta.delete(path)
         }
       }
-      followed = new Set(Object.keys(remote.meta))
       if (priorities) {
         await callServer('PUT', `${base}/skServer/priorities`, token, priorities)
         this.prioritiesWritten.wrote('', priorities)
@@ -176,25 +186,19 @@ export class MasterFollower {
       this.host.error(`Multihelm: taking over the master's vessel settings: ${errorText(error)}`)
     }
     if (followMeta) {
-      this.setFollowedMeta(followed)
+      this.saveFollowedMeta()
     }
   }
 
-  /** The master's paths, and the ones that were the master's and are no longer. */
-  private metaToWrite(remote: Record<string, unknown>, local: Record<string, unknown>): string[] {
-    const paths = new Set([...Object.keys(remote), ...this.followedMeta])
-    return [...paths].filter((p) => this.metaWritten.due(p, remote[p], local[p]))
-  }
-
-  /** Kept as it was until it is saved, so a failed save is tried again. */
-  private setFollowedMeta(paths: Set<string>): void {
-    const current = this.followedMeta
-    if (paths.size === current.size && [...paths].every((p) => current.has(p))) {
+  private saveFollowedMeta(): void {
+    const paths = [...this.followedMeta].sort()
+    const text = JSON.stringify(paths)
+    if (text === this.followedMetaSaved) {
       return
     }
     try {
-      this.host.store.saveFollowedMeta([...paths])
-      this.followedMeta = paths
+      this.host.store.saveFollowedMeta(paths)
+      this.followedMetaSaved = text
     } catch (error) {
       this.host.error(`Multihelm: saving the paths that follow the master: ${errorText(error)}`)
     }

@@ -198,6 +198,24 @@ describe('MasterFollower', () => {
     masterAnswer = masterSettings
   })
 
+  it("counts a path that already matched the master's as taken over though a write failed", async () => {
+    const depth = { 'environment.depth.belowTransducer': { units: 'm' } }
+    masterAnswer = {
+      vessel: masterSettings.vessel,
+      meta: { ...depth, 'broken.path': { units: 'V' } }
+    }
+    local = { vessel: masterSettings.vessel, meta: structuredClone(depth) }
+    await follower('matched').run()
+
+    masterAnswer = { vessel: masterSettings.vessel, meta: {} }
+    calls.length = 0
+    await follower('matched').run()
+    expect(calls.filter((c) => c.method === 'DELETE').map((c) => c.url)).toEqual([
+      '/signalk/v1/api/vessels/self/environment/depth/belowTransducer/meta'
+    ])
+    masterAnswer = masterSettings
+  })
+
   it("writes a path's metadata once when this server keeps it differently, again once it changes here", async () => {
     const kept = { displayName: 'Depth', zones: [] }
     local = { vessel: masterSettings.vessel, meta: {} }
