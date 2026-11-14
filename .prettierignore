@@ -1,4 +1,5 @@
 plugin/
+public/
 node_modules/
 coverage/
 package-lock.json

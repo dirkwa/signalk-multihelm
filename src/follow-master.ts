@@ -75,6 +75,11 @@ export class MasterFollower {
     return this.access.state === 'waiting-approval'
   }
 
+  /** The identifier of the access request on this server, as Security -> Access Requests lists it. */
+  accessRequestId(): string {
+    return `signalk-multihelm-self-${this.host.serverId}`
+  }
+
   /** Whether the user denied it; it is asked for again only after a restart. */
   denied(): boolean {
     return this.access.state === 'denied'
@@ -192,7 +197,7 @@ export class MasterFollower {
           ? await pollAccess(base, this.access.requestHref)
           : await requestAccess(
               base,
-              `signalk-multihelm-self-${this.host.serverId}`,
+              this.accessRequestId(),
               'Multihelm: take the vessel settings over from the master',
               'admin'
             )

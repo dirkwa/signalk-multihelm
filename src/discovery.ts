@@ -12,6 +12,8 @@ import os from 'node:os'
 import makeMdns from 'multicast-dns'
 import type { Answer, TxtAnswer } from 'dns-packet'
 
+import { normalizePeerUrl } from './peer-client.js'
+
 const SERVICES = ['_signalk-http._tcp.local', '_signalk-https._tcp.local']
 const QUERY_INTERVAL_MS = 30_000
 /** A server not heard of for this long is dropped from the list. */
@@ -147,7 +149,11 @@ export class ServerDiscovery {
         continue
       }
       const scheme = info.service.startsWith('_signalk-https') ? 'https' : 'http'
-      const url = `${scheme}://${address}:${String(info.port)}`
+      // Spelled as a paired peer's address is, so the two can be matched.
+      const url = normalizePeerUrl(`${scheme}://${address}:${String(info.port)}`)
+      if (!url) {
+        continue
+      }
       const server: DiscoveredServer = {
         name: instance.replace(`.${info.service}`, ''),
         url,

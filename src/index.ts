@@ -1,7 +1,6 @@
 import os from 'node:os'
 
 import type { Plugin, ServerAPI } from '@signalk/server-api'
-import { Type } from 'typebox'
 
 import {
   API_VERSION,
@@ -11,50 +10,19 @@ import {
   type Role
 } from './api.js'
 import { ServerDiscovery } from './discovery.js'
+import { ConfigSchema } from './config.js'
 import { MasterFollower } from './follow-master.js'
 import { MasterHistory, canWithdrawHistoryProvider } from './history-from-master.js'
 import { MASTER_ROUTE, MasterProxy } from './master-proxy.js'
 import { Multihelm, ROUND_INTERVAL_MS } from './multihelm.js'
 import { ROUTE_PREFIX } from './peer-client.js'
 import { registerRoutes } from './routes.js'
+import type { OwnAccessState } from './status.js'
 import { MultihelmStore } from './store.js'
 import { sourcePrioritiesFromSettings } from './source-priorities.js'
 import { vesselSettingsFromDeltas, type VesselSettings } from './vessel-settings.js'
 
 const PLUGIN_ID = 'signalk-multihelm'
-
-const ConfigSchema = Type.Object({
-  master: Type.Boolean({
-    title: "This server is the boat's master",
-    description:
-      'Set this on one server only. Plugins that run on the master alone run here, and the other servers use them through this one.',
-    default: false
-  }),
-  followVessel: Type.Boolean({
-    title: 'Take the vessel data over from the master',
-    description:
-      "Name, MMSI, call sign, dimensions and ship type from Server -> Settings. Changes made here are replaced by the master's.",
-    default: true
-  }),
-  followMetadata: Type.Boolean({
-    title: 'Take the path metadata over from the master',
-    description:
-      "Display names, units, zones and alarm limits set for paths. Changes made here are replaced by the master's.",
-    default: true
-  }),
-  followSourcePriorities: Type.Boolean({
-    title: 'Take the source priorities over from the master',
-    description:
-      "Which source wins for a path, from Data -> Source Priorities. They name sources by connection, so give the NMEA 2000 bus the same connection name on every server. Changes made here are replaced by the master's.",
-    default: true
-  }),
-  historyFromMaster: Type.Boolean({
-    title: "Answer this server's History API from the master",
-    description:
-      "While the master has a history provider (signalk-questdb, for example), history graphs on this server show the master's history, so it is kept once on the boat. Does nothing on the master, while the master has no history, or before Signal K 2.32.0.",
-    default: true
-  })
-})
 
 type Config = {
   master?: unknown
@@ -103,6 +71,7 @@ export default function (app: ServerAPI): Plugin {
   let masterProxy: MasterProxy | null = null
   let stopRoleStatus: (() => void) | null = null
   let stopFollowing: (() => void) | null = null
+  let masterFollower: MasterFollower | null = null
 
   function localVesselSettings(): VesselSettings | null {
     const deltas = host.config?.baseDeltaEditor?.deltas
@@ -123,6 +92,13 @@ export default function (app: ServerAPI): Plugin {
       return `https://127.0.0.1:${String(Number(process.env.SSLPORT) || settings.sslport || 3443)}`
     }
     return `http://127.0.0.1:${String(Number(process.env.PORT) || settings?.port || 3000)}`
+  }
+
+  function ownAccessState(): OwnAccessState {
+    if (masterFollower?.waitingForApproval()) {
+      return { state: 'waiting-approval', request: masterFollower.accessRequestId() }
+    }
+    return masterFollower?.denied() ? { state: 'denied' } : null
   }
 
   function publish(value: MultihelmProperty): void {
@@ -185,6 +161,7 @@ export default function (app: ServerAPI): Plugin {
           app.error(msg)
         }
       })
+      masterFollower = follower
       const showRole = (): void => {
         const text = statusText(mh.role(), mh.master(), mh.masterConflict())
         if (follower.waitingForApproval()) {
@@ -256,6 +233,7 @@ export default function (app: ServerAPI): Plugin {
     stop() {
       stopFollowing?.()
       stopFollowing = null
+      masterFollower = null
       stopRoleStatus?.()
       stopRoleStatus = null
       if (multihelm) {
@@ -275,7 +253,8 @@ export default function (app: ServerAPI): Plugin {
         () => multihelm,
         () => discovery?.list() ?? [],
         localVesselSettings,
-        () => masterProxy
+        () => masterProxy,
+        ownAccessState
       )
     }
   }

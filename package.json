@@ -9,14 +9,15 @@
   "scripts": {
     "format": "prettier --write . && eslint --fix .",
     "ci-lint": "eslint . && prettier --check .",
-    "build": "vite build",
-    "typecheck": "tsc --noEmit -p tsconfig.eslint.json",
+    "build": "vite build && vite build -c vite.panel.config.ts",
+    "typecheck": "tsc --noEmit -p tsconfig.eslint.json && tsc -p src/configpanel/tsconfig.json",
     "test": "vitest run",
     "build:all": "npm run ci-lint && npm run typecheck && npm run build && npm run test",
     "prepublishOnly": "npm run build"
   },
   "keywords": [
     "signalk-node-server-plugin",
+    "signalk-plugin-configurator",
     "signalk-category-utility",
     "multihelm",
     "sync",
@@ -36,6 +37,7 @@
   "signalk-plugin-enabled-by-default": true,
   "files": [
     "plugin/**/*",
+    "public/**/*",
     "icon.svg",
     "docs/screenshots/*.png"
   ],
@@ -49,16 +51,20 @@
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
+    "@module-federation/vite": "^1.24.0",
     "@signalk/server-api": "^2.33.0",
     "@types/express": "^5.0.3",
     "@types/multicast-dns": "^7.2.4",
     "@types/node": "^24.0.0",
+    "@types/react": "^19.3.0",
+    "@vitejs/plugin-react": "^6.3.0",
     "eslint": "^10.12.0",
     "eslint-config-prettier": "^10.1.8",
     "eslint-plugin-prettier": "^5.5.6",
     "express": "^5.2.1",
     "jiti": "^2.7.0",
     "prettier": "^3.0.0",
+    "react": "^19.3.1",
     "typescript": "^6.0.3",
     "typescript-eslint": "^8.71.0",
     "vite": "^8.3.2",

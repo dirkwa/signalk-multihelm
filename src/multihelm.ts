@@ -59,6 +59,8 @@ export const MASTER_CHECK_INTERVAL_MS = 30_000
  * recently, so a few missed answers do not move the role.
  */
 export const MASTER_STALE_MS = 5 * MASTER_CHECK_INTERVAL_MS
+/** A pairing request waiting for approval is followed this often, so an approval shows at once. */
+export const PAIRING_POLL_MS = 5_000
 /** Free space kept beyond an incoming file, as a fraction of its size. */
 const FREE_SPACE_MARGIN = 0.05
 
@@ -115,6 +117,8 @@ export class Multihelm {
   private announcedStatus = ''
   private masterTimer: NodeJS.Timeout | null = null
   private checkingMasters = false
+  private pairingTimer: NodeJS.Timeout | null = null
+  private pollingPairings = false
   readonly serverId: string
 
   constructor(
@@ -139,6 +143,11 @@ export class Multihelm {
     this.masterTimer = setInterval(() => {
       void this.checkMasters()
     }, MASTER_CHECK_INTERVAL_MS)
+    this.pairingTimer = setInterval(() => {
+      this.pollPairings().catch((error: unknown) => {
+        this.host.error(`Multihelm: following a pairing request: ${errorText(error)}`)
+      })
+    }, PAIRING_POLL_MS)
   }
 
   stop(): void {
@@ -151,10 +160,13 @@ export class Multihelm {
     }
     this.timer = null
     this.soon = null
-    if (this.masterTimer) {
-      clearInterval(this.masterTimer)
-      this.masterTimer = null
+    for (const timer of [this.masterTimer, this.pairingTimer]) {
+      if (timer) {
+        clearInterval(timer)
+      }
     }
+    this.masterTimer = null
+    this.pairingTimer = null
   }
 
   /**
@@ -195,6 +207,37 @@ export class Multihelm {
     // stop() may have run during the awaits above.
     if (!(this.stopped as boolean)) {
       this.announceRole()
+    }
+  }
+
+  /**
+   * Follows up the pairing requests waiting for approval, between rounds. At
+   * most one waits in the queue, so a long round does not pile them up.
+   */
+  async pollPairings(): Promise<void> {
+    const waiting = (): Peer[] => this.peers.filter((p) => p.state === 'waiting-approval')
+    if (this.pollingPairings || this.stopped || waiting().length === 0) {
+      return
+    }
+    this.pollingPairings = true
+    try {
+      await this.serialize(async () => {
+        let paired = false
+        for (const peer of waiting()) {
+          if (this.stopped) {
+            break
+          }
+          await this.pollPairingLocked(peer)
+          paired ||= peer.state === 'paired'
+        }
+        this.store.savePeers(this.peers)
+        this.announceRole()
+        if (paired) {
+          this.changedSoon()
+        }
+      })
+    } finally {
+      this.pollingPairings = false
     }
   }
 

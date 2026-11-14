@@ -8,6 +8,8 @@ sets by hand on one server (see `README.md`).
 ## Module map (`src/`)
 
 - `index.ts` — plugin lifecycle; publishes the `multihelm` PropertyValue.
+- `config.ts` — the settings schema; the panel uses its type.
+- `status.ts` — the `status` route's JSON, which the panel reads.
 - `api.ts` — the API other plugins use. Additive changes only; `apiVersion`
   changes only with a change consumers must know about.
 - `multihelm.ts` — `Multihelm`: datasets, rounds with each peer, serving,
@@ -35,6 +37,11 @@ sets by hand on one server (see `README.md`).
   the master and writes what differs through this server's own REST API
   (`/skServer/vessel`, meta PUT/DELETE, `/skServer/priorities`) with an
   admin device token on itself.
+- `configpanel/` — the settings panel the admin UI shows in place of the
+  schema form (Module Federation, `vite.panel.config.ts`): pairing, peers,
+  the role, the settings. It uses the admin UI's React through
+  `host-shim/`, never a copy of its own, and reaches the server modules by
+  type imports only. `view.ts` holds what can be tested without a browser.
 
 ## Contracts other software depends on
 
@@ -77,8 +84,9 @@ sets by hand on one server (see `README.md`).
 
 - `npm run format` — prettier + eslint --fix
 - `npm run ci-lint` — read-only lint + format check (what CI runs)
-- `npm run typecheck` — tsc over `src/` and `test/`
-- `npm run build` — Vite → `plugin/index.js`; type errors fail it
+- `npm run typecheck` — tsc over `src/` and `test/`, and over the panel
+- `npm run build` — Vite → `plugin/index.js` and the panel → `public/`; type
+  errors fail it
 - `npm test` — vitest
 - `npm run build:all` — all of the above, run before every commit
 

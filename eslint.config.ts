@@ -22,6 +22,12 @@ export default defineConfig(
     }
   },
   {
+    files: ['src/configpanel/**/*.{ts,tsx}'],
+    languageOptions: {
+      parserOptions: { project: './src/configpanel/tsconfig.json' }
+    }
+  },
+  {
     files: ['test/**/*.ts'],
     rules: {
       // vi.fn() stubs on object literals have no `this` to lose.
@@ -29,6 +35,6 @@ export default defineConfig(
     }
   },
   {
-    ignores: ['plugin/**', 'node_modules/**']
+    ignores: ['plugin/**', 'public/**', 'node_modules/**']
   }
 )
