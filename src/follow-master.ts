@@ -179,9 +179,6 @@ export class MasterFollower {
           ? callServer('DELETE', metaUrl(base, path), token)
           : callServer('PUT', metaUrl(base, path), token, { value }))
         this.metaWritten.wrote(path, value)
-        if (value === undefined) {
-          this.followedMeta.delete(path)
-        }
       }
       if (priorities) {
         await callServer('PUT', `${base}/skServer/priorities`, token, priorities)

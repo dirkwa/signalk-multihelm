@@ -170,10 +170,30 @@ describe('MasterFollower', () => {
       'DELETE /signalk/v1/api/vessels/self/environment/depth/belowTransducer/meta'
     ])
 
+    local = { vessel: masterSettings.vessel, meta: {} }
+    await follower('followed').run()
     calls.length = 0
     local = { vessel: masterSettings.vessel, meta: { [depth]: { displayName: 'Mine again' } } }
     await follower('followed').run()
     expect(calls).toEqual([])
+  })
+
+  it("removes the master's metadata again after a restart while this server still has it", async () => {
+    const depth = { 'environment.depth.belowTransducer': { units: 'm' } }
+    masterAnswer = { vessel: masterSettings.vessel, meta: depth }
+    local = { vessel: masterSettings.vessel, meta: structuredClone(depth) }
+    await follower('kept-after-delete').run()
+
+    masterAnswer = { vessel: masterSettings.vessel, meta: {} }
+    const deletes = (): number => calls.filter((c) => c.method === 'DELETE').length
+    calls.length = 0
+    const f = follower('kept-after-delete')
+    await f.run()
+    await f.run()
+    expect(deletes()).toBe(1)
+    await follower('kept-after-delete').run()
+    expect(deletes()).toBe(2)
+    masterAnswer = masterSettings
     masterAnswer = masterSettings
   })
 
