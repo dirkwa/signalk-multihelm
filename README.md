@@ -36,6 +36,11 @@ server with the master is enough for the master's settings, history and
 services; for datasets that go both ways, such as charts, pair the other
 server with it too.
 
+The settings show each paired server online or offline, with its Signal K
+and Multihelm versions and why it cannot be reached. Every server also lists
+the servers paired with it, so the master shows the others; a server on an
+older Multihelm version is not listed there until it is updated.
+
 Needs Signal K server 2.31 or later: peers read the replication routes with a
 readonly device token.
 

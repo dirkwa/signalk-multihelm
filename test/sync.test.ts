@@ -113,7 +113,8 @@ async function station(name: string, master: () => boolean = () => false): Promi
   const mh = new Multihelm(new MultihelmStore(path.join(root, name, 'data')), {
     ...quiet(),
     serverName: () => name,
-    isMaster: master
+    isMaster: master,
+    versions: () => ({ signalk: '2.37.0', multihelm: `1.0.0-${name}` })
   })
   const dataset = new FolderDataset(dir)
   const handle = mh.registerDataset(dataset)
@@ -411,7 +412,7 @@ describe('a pairing waiting for approval', () => {
             ? JSON.stringify({ state: 'COMPLETED', accessRequest: { token: 'granted' } })
             : pending
         )
-      } else if (req.url === `${ROUTE_PREFIX}/hello`) {
+      } else if (req.url?.startsWith(`${ROUTE_PREFIX}/hello`)) {
         res.end(JSON.stringify({ serverId: 'helm-id', name: 'helm', protocol: 1, master: true }))
       } else {
         res.statusCode = 404
@@ -428,5 +429,69 @@ describe('a pairing waiting for approval', () => {
     server.close()
     expect(mh.peerInfo()[0]).toMatchObject({ state: 'paired', name: 'helm', id: 'helm-id' })
     expect(mh.master()).toMatchObject({ name: 'helm' })
+  })
+})
+
+describe('the overview of the servers', () => {
+  let a: Station
+  let b: Station
+
+  beforeAll(async () => {
+    a = await station('overview-master', () => true)
+    b = await station('overview-member')
+  })
+
+  afterAll(() => {
+    a.server.close()
+    b.server.close()
+  })
+
+  it('lists a member with the server it paired with, and each sees what the other runs', async () => {
+    await b.mh.pair(a.url)
+    await b.mh.checkMasters()
+
+    expect(b.mh.peerInfo()[0]).toMatchObject({
+      online: true,
+      master: true,
+      signalk: '2.37.0',
+      multihelm: '1.0.0-overview-master'
+    })
+    expect(a.mh.pairedByInfo()).toEqual([
+      {
+        id: b.mh.serverId,
+        name: 'overview-member',
+        signalk: '2.37.0',
+        multihelm: '1.0.0-overview-member',
+        lastSeen: expect.any(Number) as number,
+        online: true
+      }
+    ])
+  })
+
+  it('keeps the list across a restart, and forgets a server on request', () => {
+    const again = new Multihelm(
+      new MultihelmStore(path.join(root, 'overview-master', 'data')),
+      quiet()
+    )
+    expect(again.pairedByInfo().map((s) => s.name)).toEqual(['overview-member'])
+    expect(again.forgetPairedBy(b.mh.serverId)).toBe(true)
+    expect(again.pairedByInfo()).toEqual([])
+  })
+
+  it('says why a paired server cannot be reached', async () => {
+    const { server, url } = await listen((req, res) => {
+      if (req.method === 'POST') {
+        res.statusCode = 404
+        res.end('{}')
+        return
+      }
+      res.end(JSON.stringify({ serverId: 'gone-id', name: 'gone', protocol: 1 }))
+    })
+    const mh = new Multihelm(new MultihelmStore(path.join(root, 'unreachable')), quiet())
+    await mh.pair(url)
+    server.close()
+    await mh.checkMasters()
+    expect(mh.peerInfo()[0]).toMatchObject({ state: 'paired', online: true })
+    expect(mh.peerInfo()[0]?.lastError).toMatch(/ECONNREFUSED|fetch failed|socket/i)
   })
 })

@@ -14,6 +14,7 @@ import type { IRouter, Request, Response } from 'express'
 import type { DiscoveredServer } from './discovery.js'
 import { MASTER_ROUTE, type MasterProxy } from './master-proxy.js'
 import type { Multihelm } from './multihelm.js'
+import type { HelloFrom } from './peer-client.js'
 import type { OwnAccessState, Status } from './status.js'
 import type { VesselSettings } from './vessel-settings.js'
 
@@ -32,6 +33,26 @@ const MAX_URL_LENGTH = 300
 function queryString(req: Request, name: string): string {
   const value = (req.query as Record<string, unknown>)[name]
   return typeof value === 'string' ? value : ''
+}
+
+const SERVER_ID = /^[\w-]{1,64}$/
+const VERSION = /^[\w.+-]{1,32}$/
+
+/** The server asking, when it said; what does not fit is left out. */
+function helloFrom(req: Request): HelloFrom | null {
+  const serverId = queryString(req, 'from')
+  const name = queryString(req, 'name').trim().slice(0, 100)
+  if (!SERVER_ID.test(serverId) || name === '') {
+    return null
+  }
+  const signalk = queryString(req, 'signalk')
+  const multihelm = queryString(req, 'multihelm')
+  return {
+    serverId,
+    name,
+    ...(VERSION.test(signalk) ? { signalk } : {}),
+    ...(VERSION.test(multihelm) ? { multihelm } : {})
+  }
 }
 
 function errorText(error: unknown): string {
@@ -74,7 +95,11 @@ export function registerRoutes(
 
   readonly.get(
     '/hello',
-    running((mh, _req, res) => {
+    running((mh, req, res) => {
+      const from = helloFrom(req)
+      if (from) {
+        mh.sawPairedServer(from)
+      }
       res.json(mh.hello())
     })
   )
@@ -153,6 +178,7 @@ export function registerRoutes(
       masterConflict: mh?.masterConflict() ?? false,
       datasets: mh?.datasetIds() ?? [],
       peers: mh?.peerInfo() ?? [],
+      pairedBy: mh?.pairedByInfo() ?? [],
       discovered: mh ? discovered() : [],
       ownAccess: mh ? ownAccess() : null
     }
@@ -180,6 +206,14 @@ export function registerRoutes(
     running(async (mh, req, res) => {
       const url = queryString(req, 'url')
       res.status((await mh.unpair(url)) ? 200 : 404).json({ removed: url })
+    })
+  )
+
+  router.delete(
+    '/paired-by',
+    running((mh, req, res) => {
+      const id = queryString(req, 'id')
+      res.status(mh.forgetPairedBy(id) ? 200 : 404).json({ removed: id })
     })
   )
 
