@@ -1,4 +1,6 @@
+import fs from 'node:fs'
 import http from 'node:http'
+import https from 'node:https'
 import type { AddressInfo } from 'node:net'
 
 import express from 'express'
@@ -166,6 +168,30 @@ describe('MasterProxy', () => {
     const res = await fetch(`${base(front)}/master/signalk/v1/api/resources/charts/c1/1/1/1`)
 
     expect(res.status).toBe(502)
+  })
+
+  it('reaches an HTTPS master by the certificate it was paired with, and by no other', async () => {
+    const pem = (name: string): string =>
+      fs.readFileSync(new URL(`fixtures/tls/${name}.pem`, import.meta.url), 'utf-8')
+    const secure = https.createServer(
+      { key: pem('leaf-key'), cert: pem('leaf'), ca: [pem('leaf'), pem('ca')] },
+      (_req, res) => {
+        res.end('secure tile')
+      }
+    )
+    await new Promise<void>((resolve) => secure.listen(0, '127.0.0.1', resolve))
+    const url = `https://127.0.0.1:${String((secure.address() as AddressInfo).port)}`
+    proxy.register('/signalk/v1/api/resources/charts/')
+
+    access = { url, token: '', ca: pem('ca') }
+    const trusted = await proxy.fetch('/signalk/v1/api/resources/charts/c1/1/1/1')
+    access = { url, token: '', ca: pem('self-signed') }
+    const other = proxy.fetch('/signalk/v1/api/resources/charts/c1/1/1/1')
+    await expect(other).rejects.toThrow(/self-signed certificate in certificate chain/)
+    secure.closeAllConnections()
+    secure.close()
+
+    expect(trusted.body.toString()).toBe('secure tile')
   })
 
   it('reads a registered path for plugins on this server', async () => {

@@ -34,11 +34,13 @@ import {
   type ListedEntry,
   type RemoteEntry
 } from './library.js'
+import type { MasterAccess } from './master-proxy.js'
 import {
   PeerHttpError,
   downloadFile,
   fetchHello,
   fetchManifest,
+  locatePeer,
   normalizePeerUrl,
   pollAccess,
   requestAccess,
@@ -99,10 +101,48 @@ function errorText(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
 }
 
+/** What Node calls a certificate chain that does not lead to a certificate it trusts. */
+const UNTRUSTED_CERTIFICATE = new Set([
+  'DEPTH_ZERO_SELF_SIGNED_CERT',
+  'SELF_SIGNED_CERT_IN_CHAIN',
+  'UNABLE_TO_VERIFY_LEAF_SIGNATURE',
+  'UNABLE_TO_GET_ISSUER_CERT',
+  'UNABLE_TO_GET_ISSUER_CERT_LOCALLY',
+  'CERT_SIGNATURE_FAILURE',
+  'CERT_UNTRUSTED',
+  'CERT_REJECTED'
+])
+
+/**
+ * Why a paired peer cannot be reached in a way that pairing it again
+ * mends: its certificate changed, or it went over to HTTPS. Null otherwise.
+ */
+function pairAgainText(error: unknown): string | null {
+  if (error instanceof PeerHttpError) {
+    return error.status >= 300 && error.status < 400
+      ? 'it redirects to another address, likely its HTTPS one; pair it again'
+      : null
+  }
+  const code = (error as { code?: unknown } | null)?.code
+  if (typeof code !== 'string') {
+    return null
+  }
+  if (UNTRUSTED_CERTIFICATE.has(code)) {
+    return 'its certificate is not the one it had when paired; pair it again if it was changed on purpose'
+  }
+  if (code === 'ERR_TLS_CERT_ALTNAME_INVALID') {
+    return 'its certificate is issued for another name; pair it by that name'
+  }
+  if (code === 'CERT_HAS_EXPIRED') {
+    return 'its certificate has expired'
+  }
+  return null
+}
+
 /** Said without the address, which the panel shows anyway. */
 function helloErrorText(error: unknown): string {
   if (!(error instanceof PeerHttpError)) {
-    return errorText(error)
+    return pairAgainText(error) ?? errorText(error)
   }
   switch (error.status) {
     case 404:
@@ -111,7 +151,7 @@ function helloErrorText(error: unknown): string {
     case 403:
       return 'access was revoked on the peer'
     default:
-      return `HTTP ${String(error.status)}`
+      return pairAgainText(error) ?? `HTTP ${String(error.status)}`
   }
 }
 
@@ -226,7 +266,7 @@ export class Multihelm {
           .map(async (peer) => {
             let hello
             try {
-              hello = await fetchHello(peer.url, peer.token, this.helloFrom())
+              hello = await fetchHello(peer, peer.token, this.helloFrom())
             } catch (error) {
               if (!this.stopped && this.peers.includes(peer)) {
                 this.helloErrors.set(peer.url, helloErrorText(error))
@@ -387,9 +427,14 @@ export class Multihelm {
   }
 
   /** Where to reach the master, with the pairing token; null when this server is it or there is none. */
-  masterAccess(): { url: string; token: string } | null {
+  masterAccess(): MasterAccess | null {
     const peer = this.masterCandidates()[0]?.peer
-    return peer ? { url: peer.url, token: peer.token } : null
+    if (!peer) {
+      return null
+    }
+    return peer.ca === undefined
+      ? { url: peer.url, token: peer.token }
+      : { url: peer.url, token: peer.token, ca: peer.ca }
   }
 
   /** More than one server is set to be the master: the user should set one only. */
@@ -618,9 +663,13 @@ export class Multihelm {
         delete peer.lastError
       }
     } catch (error) {
+      const again = pairAgainText(error)
       if (error instanceof PeerHttpError && (error.status === 401 || error.status === 403)) {
         peer.state = 'needs-pairing'
         peer.lastError = 'access was revoked on the peer'
+      } else if (again !== null) {
+        peer.state = 'needs-pairing'
+        peer.lastError = again
       } else {
         peer.lastError = errorText(error)
       }
@@ -632,7 +681,7 @@ export class Multihelm {
     const id = dataset.definition.id
     let manifest
     try {
-      manifest = await fetchManifest(peer.url, peer.token, id, peer.cursors[id] ?? 0)
+      manifest = await fetchManifest(peer, peer.token, id, peer.cursors[id] ?? 0)
     } catch (error) {
       if (error instanceof PeerHttpError && error.status === 404) {
         if (peer.lastError?.startsWith(`${id}:`)) {
@@ -763,7 +812,7 @@ export class Multihelm {
         }
         this.host.debug(`Multihelm: fetching ${id} ${remote.key} ${file.name} from ${peer.name}`)
         await downloadFile(
-          peer.url,
+          peer,
           peer.token,
           { dataset: id, key: remote.key, name: file.name },
           dest
@@ -844,17 +893,32 @@ export class Multihelm {
    */
   pair(input: string): Promise<PeerInfo> {
     return this.serialize(async () => {
-      const url = normalizePeerUrl(input)
-      if (!url) {
+      const typed = normalizePeerUrl(input)
+      if (!typed) {
         throw new Error('not a server address')
       }
+      const address = await locatePeer(typed)
+      const url = address.url
       let peer = this.peers.find((p) => p.url === url)
+      if (!peer) {
+        // Paired over HTTP before the server went over to HTTPS.
+        peer = this.peers.find((p) => p.url === typed)
+        if (peer) {
+          this.forgetAnswers(peer.url)
+          peer.url = url
+        }
+      }
       if (!peer) {
         peer = { id: '', name: url, url, token: '', state: 'needs-pairing', cursors: {} }
         this.peers.push(peer)
       }
+      if (address.ca === undefined) {
+        delete peer.ca
+      } else {
+        peer.ca = address.ca
+      }
       const result = await requestAccess(
-        url,
+        address,
         `signalk-multihelm-${this.serverId}-${crypto.randomUUID().slice(0, 8)}`,
         `Multihelm on ${this.host.serverName()}`
       )
@@ -878,13 +942,17 @@ export class Multihelm {
     return this.serialize(() => {
       const before = this.peers.length
       this.peers = this.peers.filter((p) => p.url !== url)
-      this.masterSeen.delete(url)
-      this.answers.delete(url)
-      this.helloErrors.delete(url)
+      this.forgetAnswers(url)
       this.store.savePeers(this.peers)
       this.announceRole()
       return Promise.resolve(this.peers.length !== before)
     })
+  }
+
+  private forgetAnswers(url: string): void {
+    this.masterSeen.delete(url)
+    this.answers.delete(url)
+    this.helloErrors.delete(url)
   }
 
   private applyAccessResult(peer: Peer, result: AccessRequestResult): void {
@@ -921,7 +989,7 @@ export class Multihelm {
       return
     }
     try {
-      this.applyAccessResult(peer, await pollAccess(peer.url, peer.requestHref))
+      this.applyAccessResult(peer, await pollAccess(peer, peer.requestHref))
       // applyAccessResult changed the state; read it afresh.
       if ((peer.state as Peer['state']) === 'paired') {
         await this.helloLocked(peer)
@@ -933,7 +1001,7 @@ export class Multihelm {
 
   private async helloLocked(peer: Peer): Promise<void> {
     try {
-      const hello = await fetchHello(peer.url, peer.token, this.helloFrom())
+      const hello = await fetchHello(peer, peer.token, this.helloFrom())
       if (hello.serverId === this.serverId) {
         peer.state = 'needs-pairing'
         peer.lastError = 'this is this server itself'
