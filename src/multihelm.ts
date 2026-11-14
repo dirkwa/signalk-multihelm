@@ -579,6 +579,11 @@ export class Multihelm {
 
   // --- pulling --------------------------------------------------------
 
+  /** Errors with one dataset are cleared by that dataset's next sync. */
+  private isDatasetError(text: string): boolean {
+    return [...this.datasets.keys()].some((id) => text.startsWith(`${id}:`))
+  }
+
   private async syncPeerLocked(peer: Peer): Promise<void> {
     try {
       for (const dataset of this.datasets.values()) {
@@ -587,8 +592,10 @@ export class Multihelm {
         }
         await this.syncDatasetLocked(peer, dataset)
       }
-      peer.lastSeen = Date.now()
       peer.lastSync = Date.now()
+      if (peer.lastError !== undefined && !this.isDatasetError(peer.lastError)) {
+        delete peer.lastError
+      }
     } catch (error) {
       if (error instanceof PeerHttpError && (error.status === 401 || error.status === 403)) {
         peer.state = 'needs-pairing'
@@ -918,8 +925,7 @@ export class Multihelm {
         this.masterSeen.delete(peer.url)
       }
     } catch (error) {
-      peer.lastError = helloErrorText(error)
-      this.helloErrors.set(peer.url, peer.lastError)
+      this.helloErrors.set(peer.url, helloErrorText(error))
     }
   }
 }
