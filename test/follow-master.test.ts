@@ -216,6 +216,28 @@ describe('MasterFollower', () => {
     masterAnswer = masterSettings
   })
 
+  it('keeps track of the paths taken over while its own access request waits', async () => {
+    const depth = { 'environment.depth.belowTransducer': { units: 'm' } }
+    security = true
+    approval = 'PENDING'
+    masterAnswer = {
+      vessel: masterSettings.vessel,
+      meta: { ...depth, 'other.path': { units: 'V' } }
+    }
+    local = { vessel: masterSettings.vessel, meta: structuredClone(depth) }
+    await follower('waiting').run()
+
+    approval = 'APPROVED'
+    masterAnswer = { vessel: masterSettings.vessel, meta: {} }
+    calls.length = 0
+    await follower('waiting').run()
+    expect(calls.filter((c) => c.method === 'DELETE').map((c) => c.url)).toEqual([
+      '/signalk/v1/api/vessels/self/environment/depth/belowTransducer/meta'
+    ])
+    security = false
+    masterAnswer = masterSettings
+  })
+
   it("writes a path's metadata once when this server keeps it differently, again once it changes here", async () => {
     const kept = { displayName: 'Depth', zones: [] }
     local = { vessel: masterSettings.vessel, meta: {} }

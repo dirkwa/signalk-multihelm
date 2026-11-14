@@ -143,6 +143,7 @@ export class MasterFollower {
         ...Object.keys(remote.meta),
         ...[...this.followedMeta].filter((p) => local.meta[p] !== undefined)
       ])
+      this.saveFollowedMeta()
     }
     const metaChanged = followMeta
       ? [...this.followedMeta].filter((p) => this.metaWritten.due(p, remote.meta[p], local.meta[p]))
@@ -151,9 +152,6 @@ export class MasterFollower {
       ? this.prioritiesToWrite(remote.priorities, local.priorities)
       : null
     if (!vesselChanged && metaChanged.length === 0 && !priorities) {
-      if (followMeta) {
-        this.saveFollowedMeta()
-      }
       return
     }
     const token = await this.ownToken()
