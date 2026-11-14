@@ -3,9 +3,8 @@
  * and source priorities over from the master. They are read from the
  * master with the pairing token and written here through this server's own
  * REST API, the way its settings pages write them, so they survive a
- * restart. Writing
- * needs an admin device token on this server, asked for once; until it is
- * approved nothing is written.
+ * restart. Writing needs an admin device token on this server, asked for
+ * once; until it is approved nothing is written.
  */
 
 import { isDeepStrictEqual } from 'node:util'
