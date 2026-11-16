@@ -3,7 +3,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-import type { Plugin, ServerAPI } from '@signalk/server-api'
+import type { Context, Path, Plugin, ServerAPI, Unsubscribes } from '@signalk/server-api'
 
 import {
   API_VERSION,
@@ -21,7 +21,7 @@ import { Multihelm, ROUND_INTERVAL_MS } from './multihelm.js'
 import { ROUTE_PREFIX } from './peer-client.js'
 import { registerRoutes } from './routes.js'
 import type { OwnAccessState } from './status.js'
-import { hasResourcesApi, resourcesDataset } from './resources-dataset.js'
+import { hasResourcesApi, resourceOfPath, resourcesDataset } from './resources-dataset.js'
 import { MultihelmStore } from './store.js'
 import { sourcePrioritiesFromSettings } from './source-priorities.js'
 import { vesselSettingsFromDeltas, type VesselSettings } from './vessel-settings.js'
@@ -118,6 +118,50 @@ export default function (app: ServerAPI): Plugin {
     return masterFollower?.denied() ? { state: 'denied' } : null
   }
 
+  /** Deletions are learnt from the server's deltas: only they show that one was stored. */
+  function syncResources(mh: Multihelm): () => void {
+    const sync = resourcesDataset({
+      list: (type) => app.resourcesApi.listResources(type, {}),
+      set: (type, id, resource) => app.resourcesApi.setResource(type, id, resource),
+      delete: (type, id) => app.resourcesApi.deleteResource(type, id),
+      mirrorDir: path.join(app.getDataDirPath(), 'resources'),
+      debug: (msg) => {
+        app.debug(msg)
+      }
+    })
+    const handle = mh.registerDataset(sync.dataset)
+    const unsubscribes: Unsubscribes = []
+    app.subscriptionmanager.subscribe(
+      {
+        context: 'vessels.self' as Context,
+        subscribe: [{ path: 'resources.*' as Path, policy: 'instant' }],
+        sourcePolicy: 'all'
+      },
+      unsubscribes,
+      (error) => {
+        app.error(`Multihelm: following resource deletions: ${String(error)}`)
+      },
+      (delta) => {
+        for (const update of delta.updates) {
+          for (const { path: valuePath, value } of 'values' in update ? update.values : []) {
+            const resource = value === null ? resourceOfPath(valuePath) : null
+            if (resource) {
+              void sync.deleted(resource.type, resource.id).then(() => {
+                handle.changed()
+              })
+            }
+          }
+        }
+      }
+    )
+    return () => {
+      for (const unsubscribe of unsubscribes) {
+        unsubscribe()
+      }
+      handle.unregister()
+    }
+  }
+
   function publish(value: MultihelmProperty): void {
     app.emitPropertyValue(PROPERTY_NAME, value)
   }
@@ -151,20 +195,8 @@ export default function (app: ServerAPI): Plugin {
       discovery = new ServerDiscovery(() => host.config?.getExternalPort?.())
       discovery.start()
       mh.start()
-      const resources =
-        settings.syncResources !== false && hasResourcesApi(app)
-          ? mh.registerDataset(
-              resourcesDataset({
-                list: (type) => app.resourcesApi.listResources(type, {}),
-                set: (type, id, resource) => app.resourcesApi.setResource(type, id, resource),
-                delete: (type, id) => app.resourcesApi.deleteResource(type, id),
-                mirrorDir: path.join(app.getDataDirPath(), 'resources'),
-                debug: (msg) => {
-                  app.debug(msg)
-                }
-              })
-            )
-          : null
+      const stopResources =
+        settings.syncResources !== false && hasResourcesApi(app) ? syncResources(mh) : null
       publish({
         apiVersion: API_VERSION,
         registerDataset: (definition) => mh.registerDataset(definition),
@@ -257,7 +289,7 @@ export default function (app: ServerAPI): Plugin {
         clearInterval(historyTimer)
         stopRoleHistory()
         history?.stop()
-        resources?.unregister()
+        stopResources?.()
       }
       stopRoleStatus = mh.onStatusChanged(showRole)
       showRole()

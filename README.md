@@ -64,10 +64,11 @@ master for them; when two stations change the same route before they hear
 of each other, the change of the server with the higher server id wins.
 Multihelm reads and writes them through each server's Resources API, so
 they are kept by whichever resources provider the server uses, and charts
-and tracks are left to their own plugins. A type of resource that suddenly
-reads as empty, as when its provider fails, is not taken for deleted: a
-station that deletes its last route keeps it on the others until another
-change. Turn **Keep routes and waypoints in step** off on a server to keep
+and tracks are left to their own plugins. A deletion counts once the server
+announces it, as it does for every deletion through the Resources API while
+Multihelm runs; a resource missing from a listing, as when its provider
+fails, is not taken for deleted. When a failure leaves it unclear, a
+deleted route can come back, but none is lost. Turn **Keep routes and waypoints in step** off on a server to keep
 its own.
 
 ## The master

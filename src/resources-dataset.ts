@@ -24,6 +24,7 @@ const RESOURCE_ID =
 const READ_ONLY_FIELDS = new Set(['timestamp', '$source'])
 const STORED_CHECKS = 20
 const STORED_CHECK_MS = 100
+const DELETE_CONFIRM_MS = 2000
 
 export interface ResourcesHost {
   list: (type: ResourceType) => Promise<Record<string, unknown>>
@@ -49,6 +50,18 @@ export function isResourceKey(key: string): boolean {
   return (
     rest.length === 0 && type !== undefined && isResourceType(type) && RESOURCE_ID.test(id ?? '')
   )
+}
+
+/** The resource a `resources.<type>.<id>` delta path names, or null. */
+export function resourceOfPath(deltaPath: string): { type: ResourceType; id: string } | null {
+  const [root, type, id, ...rest] = deltaPath.split('.')
+  return root === 'resources' &&
+    rest.length === 0 &&
+    type !== undefined &&
+    isResourceType(type) &&
+    RESOURCE_ID.test(id ?? '')
+    ? { type, id: id ?? '' }
+    : null
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -87,7 +100,13 @@ const sleep = (ms: number): Promise<void> =>
     setTimeout(resolve, ms)
   })
 
-export function resourcesDataset(host: ResourcesHost): DatasetDefinition {
+export interface ResourcesDataset {
+  dataset: DatasetDefinition
+  /** The server announced a deletion with a null value on `resources.<type>.<id>`. */
+  deleted: (type: ResourceType, id: string) => Promise<void>
+}
+
+export function resourcesDataset(host: ResourcesHost): ResourcesDataset {
   const mirrorPath = (type: ResourceType, id: string): string =>
     path.join(host.mirrorDir, type, `${id}.json`)
 
@@ -124,13 +143,13 @@ export function resourcesDataset(host: ResourcesHost): DatasetDefinition {
   }
 
   /**
-   * The resources of one type as they are now. A type that cannot be read,
-   * or reads as empty where it had resources, keeps its last listing: the
-   * server's Resources API answers a failing provider with an empty list,
-   * and taking that for a deletion would delete them on every server.
+   * The resources of one type, added to and updated from the server's
+   * listing but never shortened by it: the Resources API leaves a failing
+   * provider out of its answer, so a resource missing from it may still be
+   * there. Deletions come from the server's deltas instead (`deleted`).
    */
   async function current(type: ResourceType): Promise<Map<string, string>> {
-    const before = await mirrored(type)
+    const known = await mirrored(type)
     let listed: Record<string, unknown>
     try {
       listed = await host.list(type)
@@ -138,36 +157,27 @@ export function resourcesDataset(host: ResourcesHost): DatasetDefinition {
       host.debug(
         `Multihelm: cannot list the ${type}: ${error instanceof Error ? error.message : String(error)}`
       )
-      return before
+      return known
     }
-    const now = new Map<string, string>()
     for (const [id, resource] of Object.entries(listed)) {
-      if (RESOURCE_ID.test(id) && isRecord(resource)) {
-        now.set(id, resourceText(resource))
+      if (RESOURCE_ID.test(id) && isRecord(resource) && !deletedHere.has(`${type}/${id}`)) {
+        const text = resourceText(resource)
+        await mirror(type, id, text, known.get(id))
+        known.set(id, text)
       }
     }
-    if (now.size === 0 && before.size > 0) {
-      host.debug(`Multihelm: the ${type} read as empty; keeping the ${String(before.size)} known`)
-      return before
-    }
-    for (const [id, text] of now) {
-      await mirror(type, id, text, before.get(id))
-    }
-    for (const id of before.keys()) {
-      if (!now.has(id)) {
-        await fs.promises.rm(mirrorPath(type, id), { force: true })
-      }
-    }
-    return now
+    return known
   }
 
+  /** Deleted on this server since the start; a listing read before the deletion must not bring them back. */
+  const deletedHere = new Set<string>()
+  const awaitingDeletion = new Map<string, () => void>()
+
   /** The Resources API answers before the provider has written: wait until it has. */
-  async function whenStored(type: ResourceType, id: string, text: string | null): Promise<void> {
+  async function whenStored(type: ResourceType, id: string, text: string): Promise<void> {
     for (let check = 0; check < STORED_CHECKS; check++) {
-      const listed = await host.list(type)
-      const resource = listed[id]
-      const stored = isRecord(resource) ? resourceText(resource) : null
-      if (stored === text) {
+      const resource = (await host.list(type))[id]
+      if (isRecord(resource) && resourceText(resource) === text) {
         return
       }
       await sleep(STORED_CHECK_MS)
@@ -175,7 +185,29 @@ export function resourcesDataset(host: ResourcesHost): DatasetDefinition {
     throw new Error(`the server did not store ${type}/${id}`)
   }
 
-  return {
+  /** Only the server's delta says a deletion was stored; a listing that lacks the resource may just be failing. */
+  function whenDeleted(key: string): Promise<void> {
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => {
+        awaitingDeletion.delete(key)
+        reject(new Error(`the server did not delete ${key}`))
+      }, DELETE_CONFIRM_MS)
+      awaitingDeletion.set(key, () => {
+        clearTimeout(timer)
+        resolve()
+      })
+    })
+  }
+
+  async function deleted(type: ResourceType, id: string): Promise<void> {
+    const key = `${type}/${id}`
+    deletedHere.add(key)
+    await fs.promises.rm(mirrorPath(type, id), { force: true })
+    awaitingDeletion.get(key)?.()
+    awaitingDeletion.delete(key)
+  }
+
+  const dataset: DatasetDefinition = {
     id: RESOURCES_DATASET,
     isValidKey: isResourceKey,
 
@@ -206,17 +238,35 @@ export function resourcesDataset(host: ResourcesHost): DatasetDefinition {
         throw new Error(`${entry.key} is not a resource`)
       }
       const text = resourceText(resource)
+      deletedHere.delete(entry.key)
       await host.set(type, id, resource)
       await whenStored(type, id, text)
       await mirror(type, id, text)
     },
 
+    /**
+     * A delete the server refuses is taken as done: it cannot say whether
+     * the resource is already gone or its provider failed, and should it
+     * still be there, the next listing offers it to the peers again. A
+     * failure can bring a deleted route back, but never lose one.
+     */
     remove: async (key: string): Promise<boolean> => {
       const { type, id } = splitKey(key)
-      await host.delete(type, id)
-      await whenStored(type, id, null)
-      await fs.promises.rm(mirrorPath(type, id), { force: true })
+      const confirmed = whenDeleted(key)
+      try {
+        await host.delete(type, id)
+      } catch (error) {
+        awaitingDeletion.get(key)?.()
+        host.debug(
+          `Multihelm: the server refused to delete ${key}: ${error instanceof Error ? error.message : String(error)}`
+        )
+        await fs.promises.rm(mirrorPath(type, id), { force: true })
+        return true
+      }
+      await confirmed
       return true
     }
   }
+
+  return { dataset, deleted }
 }
