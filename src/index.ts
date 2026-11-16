@@ -3,7 +3,15 @@ import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-import type { Context, Path, Plugin, ServerAPI, Unsubscribes } from '@signalk/server-api'
+import type {
+  Context,
+  Path,
+  Plugin,
+  ServerAPI,
+  SubscribeCallback,
+  SubscribeMessage,
+  Unsubscribes
+} from '@signalk/server-api'
 
 import {
   API_VERSION,
@@ -81,6 +89,18 @@ type Host = ServerAPI & {
   }
 }
 
+/** The server takes the source policy of a plugin's subscription as an argument, not from the command. */
+interface SourcePolicySubscriptions {
+  subscribe: (
+    command: SubscribeMessage,
+    unsubscribes: Unsubscribes,
+    errorCallback: (err: unknown) => void,
+    callback: SubscribeCallback,
+    user: string | undefined,
+    sourcePolicy: 'all'
+  ) => void
+}
+
 export default function (app: ServerAPI): Plugin {
   const host = app as Host
   let multihelm: Multihelm | null = null
@@ -134,11 +154,10 @@ export default function (app: ServerAPI): Plugin {
     })
     const handle = mh.registerDataset(sync.dataset)
     const unsubscribes: Unsubscribes = []
-    app.subscriptionmanager.subscribe(
+    ;(app.subscriptionmanager as SourcePolicySubscriptions).subscribe(
       {
         context: 'vessels.self' as Context,
-        subscribe: [{ path: 'resources.*' as Path, policy: 'instant' }],
-        sourcePolicy: 'all'
+        subscribe: [{ path: 'resources.*' as Path, policy: 'instant' }]
       },
       unsubscribes,
       (error) => {
@@ -164,7 +183,9 @@ export default function (app: ServerAPI): Plugin {
             }
           }
         }
-      }
+      },
+      undefined,
+      'all'
     )
     return () => {
       for (const unsubscribe of unsubscribes) {
