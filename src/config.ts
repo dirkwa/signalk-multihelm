@@ -7,6 +7,12 @@ export const ConfigSchema = Type.Object({
       'Set this on one server only. Plugins that run on the master alone run here, and the other servers use them through this one.',
     default: false
   }),
+  syncResources: Type.Boolean({
+    title: 'Keep routes and waypoints in step',
+    description:
+      'Routes, waypoints, regions and notes, kept the same on every server of the boat: a change on one reaches the others, with no master.',
+    default: true
+  }),
   followVessel: Type.Boolean({
     title: 'Take the vessel data over from the master',
     description:

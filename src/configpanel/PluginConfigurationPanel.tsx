@@ -38,6 +38,7 @@ function errorText(error: unknown): string {
 function withDefaults(configuration: Settings | undefined): Required<Settings> {
   return {
     master: configuration?.master === true,
+    syncResources: configuration?.syncResources !== false,
     followVessel: configuration?.followVessel !== false,
     followMetadata: configuration?.followMetadata !== false,
     followSourcePriorities: configuration?.followSourcePriorities !== false,
@@ -504,6 +505,11 @@ function SettingsCard({ configuration, save }: Props) {
           'master',
           "This server is the boat's master",
           'Set this on one server only. Plugins that run on the master alone run here, and the other servers use them through this one.'
+        )}
+        {option(
+          'syncResources',
+          'Keep routes and waypoints in step',
+          'Routes, waypoints, regions and notes, kept the same on every server of the boat: a change on one reaches the others, with no master.'
         )}
         {onMaster && (
           <p className="small text-body-secondary">

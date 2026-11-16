@@ -55,6 +55,22 @@ readonly device token.
 
 Multihelm is enabled when it is installed.
 
+## Routes and waypoints
+
+Routes, waypoints, regions and notes are the same on every server of the
+boat: one made or changed at one station appears at the others within a
+minute or so, and one deleted there is deleted at the others. There is no
+master for them; when two stations change the same route before they hear
+of each other, the change of the server with the higher server id wins.
+Multihelm reads and writes them through each server's Resources API, so
+they are kept by whichever resources provider the server uses, and charts
+and tracks are left to their own plugins. A deletion counts once the server
+announces it, as it does for every deletion through the Resources API while
+Multihelm runs; a resource missing from a listing, as when its provider
+fails, is not taken for deleted. When a failure leaves it unclear, a
+deleted route can come back, but none is lost. Turn **Keep routes and waypoints in step** off on a server to keep
+its own.
+
 ## The master
 
 Set **This server is the boat's master** in the plugin settings of one
