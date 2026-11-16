@@ -515,7 +515,9 @@ function MasterPluginsCard({ status, onSaved }: { status: Status; onSaved: () =>
   const selected = chosen ?? status.masterPlugins
   const unchanged =
     chosen === null || [...chosen].sort().join() === [...status.masterPlugins].sort().join()
-  const missing = status.masterPlugins.filter((id) => !plugins?.some((p) => p.id === id))
+  const missing = [...new Set([...status.masterPlugins, ...selected])].filter(
+    (id) => !plugins?.some((p) => p.id === id)
+  )
 
   const toggle = (id: string, on: boolean): void => {
     setChosen(on ? [...selected, id] : selected.filter((x) => x !== id))
@@ -556,6 +558,7 @@ function MasterPluginsCard({ status, onSaved }: { status: Status; onSaved: () =>
               type="checkbox"
               id={`multihelm-master-plugin-${plugin.id}`}
               checked={selected.includes(plugin.id)}
+              disabled={saving}
               onChange={(e) => {
                 toggle(plugin.id, e.target.checked)
               }}
@@ -573,6 +576,7 @@ function MasterPluginsCard({ status, onSaved }: { status: Status; onSaved: () =>
                 type="checkbox"
                 id={`multihelm-master-plugin-${id}`}
                 checked={selected.includes(id)}
+                disabled={saving}
                 onChange={(e) => {
                   toggle(id, e.target.checked)
                 }}

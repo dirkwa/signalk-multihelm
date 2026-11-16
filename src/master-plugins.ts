@@ -209,9 +209,12 @@ export class MasterOnlyPlugins {
           continue
         }
         const options = await callServer('GET', pluginUrl(base, id, '/config'), token)
-        // The role may have moved during the requests; the next pass follows the new one.
+        // The role or the list may have moved during the requests; the next pass follows them.
         if (this.host.wanted() !== wanted) {
           return
+        }
+        if (!this.host.ids().includes(id)) {
+          continue
         }
         const body =
           typeof options === 'object' && options !== null && !Array.isArray(options)

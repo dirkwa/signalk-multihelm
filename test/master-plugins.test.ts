@@ -142,11 +142,11 @@ describe('switching the plugins that run on the master only', () => {
   function switcher(
     name: string,
     wanted: boolean | null | (() => boolean | null),
-    ids: string[]
+    ids: string[] | (() => string[])
   ): MasterOnlyPlugins {
     const store = new MultihelmStore(path.join(root, name))
     const host: SwitchHost = {
-      ids: () => ids,
+      ids: typeof ids === 'function' ? ids : () => ids,
       wanted: typeof wanted === 'function' ? wanted : () => wanted,
       access: new OwnServerAccess({
         store,
@@ -206,6 +206,13 @@ describe('switching the plugins that run on the master only', () => {
     let asked = 0
     // Known when the pass starts, gone by the time it would write.
     await switcher('moved', () => (asked++ === 0 ? false : null), ['autopilot']).applyOnce()
+    expect(posts).toEqual([])
+  })
+
+  it('leaves alone a plugin taken off the list while it asked the server', async () => {
+    plugins.set('autopilot', { enabled: true })
+    let listed = 0
+    await switcher('dropped', false, () => (listed++ === 0 ? ['autopilot'] : [])).applyOnce()
     expect(posts).toEqual([])
   })
 })
