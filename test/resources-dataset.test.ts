@@ -25,6 +25,8 @@ interface Fake {
   neverStores: boolean
   /** The server refuses a delete, as it does for a resource no provider holds. */
   refusesDelete: boolean
+  /** Runs after a listing was read and before it is answered. */
+  whileListing?: () => void
 }
 
 function fakeServer(): Fake {
@@ -75,17 +77,18 @@ describe('the resources dataset', () => {
     fake = fakeServer()
     errors = []
     sync = resourcesDataset({
-      list: (type) =>
-        fake.fail
-          ? Promise.resolve({})
-          : Promise.resolve(
-              Object.fromEntries(
-                Object.entries(fake.store[type]).map(([id, r]) => [
-                  id,
-                  { ...r, timestamp: new Date().toISOString(), $source: 'resources-provider' }
-                ])
-              )
-            ),
+      list: (type) => {
+        const listed = fake.fail
+          ? {}
+          : Object.fromEntries(
+              Object.entries(fake.store[type]).map(([id, r]) => [
+                id,
+                { ...r, timestamp: new Date().toISOString(), $source: 'resources-provider' }
+              ])
+            )
+        fake.whileListing?.()
+        return Promise.resolve(listed)
+      },
       set: (type, id, resource) => {
         later(fake, () => {
           fake.store[type][id] = resource
@@ -313,5 +316,23 @@ describe('the resources dataset', () => {
 
     expect(await dataset.list()).toEqual([])
     expect(fs.existsSync(file)).toBe(false)
+  })
+
+  it('does not take a listing read before a deletion for the resource written after it', async () => {
+    fake.store.routes[ROUTE] = { name: 'Harbour' }
+    await dataset.list()
+
+    fake.whileListing = () => {
+      fake.whileListing = undefined
+      Reflect.deleteProperty(fake.store.routes, ROUTE)
+      void sync.deleted('routes', ROUTE)
+      fake.store.routes[ROUTE] = { name: 'Marina' }
+      sync.written('routes', ROUTE)
+    }
+    expect((await dataset.list()).map((e) => e.key)).not.toContain(`routes/${ROUTE}`)
+
+    const entries = await dataset.list()
+    expect(entries.map((e) => e.key)).toContain(`routes/${ROUTE}`)
+    expect(read(entries.find((e) => e.key === `routes/${ROUTE}`))).toEqual({ name: 'Marina' })
   })
 })

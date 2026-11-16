@@ -152,6 +152,7 @@ export function resourcesDataset(host: ResourcesHost): ResourcesDataset {
    * there. Deletions come from the server's deltas instead (`deleted`).
    */
   async function current(type: ResourceType): Promise<Map<string, string>> {
+    const readAt = deletions
     const known = await mirrored(type)
     let listed: Record<string, unknown>
     try {
@@ -166,7 +167,9 @@ export function resourcesDataset(host: ResourcesHost): ResourcesDataset {
       if (!RESOURCE_ID.test(id) || !isRecord(resource)) {
         continue
       }
-      if (deletedHere.has(`${type}/${id}`)) {
+      const key = `${type}/${id}`
+      if (deletedHere.has(key) || (deletedAt.get(key) ?? 0) > readAt) {
+        known.delete(id)
         continue
       }
       const text = resourceText(resource)
@@ -181,6 +184,9 @@ export function resourcesDataset(host: ResourcesHost): ResourcesDataset {
    * before the deletion must not bring them back.
    */
   const deletedHere = new Set<string>()
+  /** When each was last deleted, counted in deletions: a listing read before then is stale for it. */
+  const deletedAt = new Map<string, number>()
+  let deletions = 0
   const awaitingDeletion = new Map<string, () => void>()
   /** Deleted on the server, but their mirror files could not be removed yet. */
   const pendingRemovals = new Set<string>()
@@ -235,6 +241,7 @@ export function resourcesDataset(host: ResourcesHost): ResourcesDataset {
   async function deleted(type: ResourceType, id: string): Promise<void> {
     const key = `${type}/${id}`
     deletedHere.add(key)
+    deletedAt.set(key, ++deletions)
     await exclusive(() => removeMirror(key))
     awaitingDeletion.get(key)?.()
     awaitingDeletion.delete(key)
