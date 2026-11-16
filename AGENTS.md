@@ -47,6 +47,13 @@ sets by hand on one server (see `README.md`).
   the master and writes what differs through this server's own REST API
   (`/skServer/vessel`, meta PUT/DELETE, `/skServer/priorities`) with an
   admin device token on itself.
+- `own-access.ts` — `OwnServerAccess`: the admin device token on this
+  server itself, asked for once, for what Multihelm writes through its REST
+  API.
+- `master-plugins.ts` — the plugins that run on the master only: the list,
+  kept in step as the `signalk-multihelm/settings` dataset, and
+  `MasterOnlyPlugins`, which switches them through `/plugins/<id>/config`
+  once the role is known, and not at all while no master is found.
 - `configpanel/` — the settings panel the admin UI shows in place of the
   schema form (Module Federation, `vite.panel.config.ts`): pairing, peers,
   the role, the settings. It uses the admin UI's React through

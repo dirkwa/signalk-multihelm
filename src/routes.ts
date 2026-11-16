@@ -12,6 +12,7 @@
 import type { IRouter, Request, Response } from 'express'
 
 import type { DiscoveredServer } from './discovery.js'
+import { parsePluginIds, type MasterPluginList } from './master-plugins.js'
 import { MASTER_ROUTE, type MasterProxy } from './master-proxy.js'
 import type { Multihelm } from './multihelm.js'
 import type { HelloFrom } from './peer-client.js'
@@ -47,9 +48,11 @@ function helloFrom(req: Request): HelloFrom | null {
   }
   const signalk = queryString(req, 'signalk')
   const multihelm = queryString(req, 'multihelm')
+  const master = queryString(req, 'master')
   return {
     serverId,
     name,
+    ...(master === '1' || master === '0' ? { master: master === '1' } : {}),
     ...(VERSION.test(signalk) ? { signalk } : {}),
     ...(VERSION.test(multihelm) ? { multihelm } : {})
   }
@@ -65,7 +68,8 @@ export function registerRoutes(
   discovered: () => DiscoveredServer[],
   vesselSettings: () => VesselSettings | null = () => null,
   masterProxy: () => MasterProxy | null = () => null,
-  ownAccess: () => OwnAccessState = () => null
+  ownAccess: () => OwnAccessState = () => null,
+  masterPlugins: () => MasterPluginList | null = () => null
 ): void {
   const scoped = (router as RouterWithAccess).access
   const available = typeof scoped === 'function'
@@ -180,7 +184,8 @@ export function registerRoutes(
       peers: mh?.peerInfo() ?? [],
       pairedBy: mh?.pairedByInfo() ?? [],
       discovered: mh ? discovered() : [],
-      ownAccess: mh ? ownAccess() : null
+      ownAccess: mh ? ownAccess() : null,
+      masterPlugins: masterPlugins()?.ids() ?? []
     }
     res.json(status)
   })
@@ -216,6 +221,25 @@ export function registerRoutes(
       res.status(mh.forgetPairedBy(id) ? 200 : 404).json({ removed: id })
     })
   )
+
+  router.put('/master-plugins', async (req: Request, res: Response) => {
+    const list = masterPlugins()
+    if (!list) {
+      res.status(503).json({ error: 'Multihelm is not running' })
+      return
+    }
+    const ids = parsePluginIds((req.body as { plugins?: unknown } | undefined)?.plugins)
+    if (!ids) {
+      res.status(400).json({ error: 'plugins must be a list of plugin ids' })
+      return
+    }
+    try {
+      await list.set(ids)
+      res.json({ plugins: list.ids() })
+    } catch (error) {
+      res.status(500).json({ error: errorText(error) })
+    }
+  })
 
   router.post(
     '/run',

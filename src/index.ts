@@ -23,6 +23,7 @@ import {
 import { ServerDiscovery } from './discovery.js'
 import { ConfigSchema } from './config.js'
 import { MasterFollower } from './follow-master.js'
+import { MasterOnlyPlugins, MasterPluginList } from './master-plugins.js'
 import { MasterHistory, canWithdrawHistoryProvider } from './history-from-master.js'
 import { MASTER_ROUTE, MasterProxy } from './master-proxy.js'
 import { Multihelm, ROUND_INTERVAL_MS } from './multihelm.js'
@@ -58,10 +59,10 @@ type Config = {
 }
 
 const APPROVE_HINT =
-  "approve Multihelm's request under Security -> Access Requests on this server to take the vessel settings over"
+  "approve Multihelm's request under Security -> Access Requests on this server to take the vessel settings over and switch the plugins that run on the master"
 
 const DENIED_HINT =
-  'the access request on this server was denied, so the vessel settings are not taken over; restart the plugin to ask again'
+  'the access request on this server was denied, so the vessel settings are not taken over and no plugin is switched for the master; restart the plugin to ask again'
 
 function statusText(role: Role, master: PeerInfo | null, conflict: boolean): string {
   if (conflict) {
@@ -110,6 +111,7 @@ export default function (app: ServerAPI): Plugin {
   let stopRoleStatus: (() => void) | null = null
   let stopFollowing: (() => void) | null = null
   let ownAccess: OwnServerAccess | null = null
+  let masterPluginList: MasterPluginList | null = null
 
   function localVesselSettings(): VesselSettings | null {
     const deltas = host.config?.baseDeltaEditor?.deltas
@@ -252,6 +254,36 @@ export default function (app: ServerAPI): Plugin {
         }
       })
       ownAccess = access
+      const masterPlugins = new MasterOnlyPlugins({
+        ids: () => pluginList.ids(),
+        // Nothing is switched before the role is known, nor on a server with no master to defer to.
+        wanted: () =>
+          !mh.roleKnown() ? null : mh.role() === 'master' ? true : mh.master() ? false : null,
+        access,
+        ownUrl,
+        selfId: PLUGIN_ID,
+        debug: (msg) => {
+          app.debug(msg)
+        },
+        error: (msg) => {
+          app.error(msg)
+        }
+      })
+      const pluginList = new MasterPluginList(
+        path.join(app.getDataDirPath(), 'master-plugins'),
+        () => {
+          masterPlugins.apply()
+          settingsHandle.changed()
+        }
+      )
+      const settingsHandle = mh.registerDataset(pluginList.dataset)
+      masterPluginList = pluginList
+      const pluginsTimer = setInterval(() => {
+        masterPlugins.apply()
+      }, ROUND_INTERVAL_MS)
+      const stopRolePlugins = mh.onRoleChanged(() => {
+        masterPlugins.apply()
+      })
       const follower = new MasterFollower({
         store,
         access,
@@ -326,6 +358,9 @@ export default function (app: ServerAPI): Plugin {
       const stopRoleHistory = mh.onRoleChanged(checkHistory)
       checkHistory()
       stopFollowing = () => {
+        clearInterval(pluginsTimer)
+        stopRolePlugins()
+        settingsHandle.unregister()
         clearInterval(followTimer)
         stopRoleFollow()
         clearInterval(historyTimer)
@@ -341,6 +376,7 @@ export default function (app: ServerAPI): Plugin {
       stopFollowing?.()
       stopFollowing = null
       ownAccess = null
+      masterPluginList = null
       stopRoleStatus?.()
       stopRoleStatus = null
       if (multihelm) {
@@ -361,7 +397,8 @@ export default function (app: ServerAPI): Plugin {
         () => discovery?.list() ?? [],
         localVesselSettings,
         () => masterProxy,
-        ownAccessState
+        ownAccessState,
+        () => masterPluginList
       )
     }
   }

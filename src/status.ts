@@ -8,9 +8,10 @@ import type { DiscoveredServer } from './discovery.js'
 import type { PairedServer } from './store.js'
 
 /**
- * This server's own admin access request, which a member needs to write the
- * master's vessel settings; null while none waits or was denied. `request` is
- * its identifier, so the panel can approve it.
+ * This server's own admin access request, which a server needs to write the
+ * master's vessel settings and to switch the plugins that run on the master;
+ * null while none waits or was denied. `request` is its identifier, so the
+ * panel can approve it.
  */
 export type OwnAccessState =
   { state: 'waiting-approval'; request: string } | { state: 'denied' } | null
@@ -38,4 +39,6 @@ export interface Status {
   pairedBy: PairedByInfo[]
   discovered: DiscoveredServer[]
   ownAccess: OwnAccessState
+  /** The plugins that run on the boat's master only, the same on every server. */
+  masterPlugins: string[]
 }

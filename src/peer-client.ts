@@ -62,6 +62,8 @@ export interface Hello {
 export interface HelloFrom {
   serverId: string
   name: string
+  /** It is set to be the boat's master; a peer that knew otherwise asks again at once. */
+  master?: boolean
   signalk?: string
   multihelm?: string
 }
@@ -71,6 +73,9 @@ function helloQuery(from: HelloFrom | undefined): string {
     return ''
   }
   const query = new URLSearchParams({ from: from.serverId, name: from.name })
+  if (from.master !== undefined) {
+    query.set('master', from.master ? '1' : '0')
+  }
   if (from.signalk) {
     query.set('signalk', from.signalk)
   }
@@ -332,7 +337,7 @@ export async function fetchVesselSettings(peer: PeerAddress, token: string): Pro
 
 /** A request to a Signal K server's own REST API; throws on any status but 2xx. */
 export async function callServer(
-  method: 'GET' | 'PUT' | 'DELETE',
+  method: 'GET' | 'POST' | 'PUT' | 'DELETE',
   url: string,
   token: string,
   body?: unknown

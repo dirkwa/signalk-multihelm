@@ -158,6 +158,7 @@ export default function PluginConfigurationPanel({ configuration, save }: Props)
           {status.role !== 'master' && status.pairedBy.length > 0 && (
             <PairedByCard status={status} busy={busy} onForget={forget} />
           )}
+          <MasterPluginsCard status={status} onSaved={refresh} />
           <div className="card mb-3">
             <div className="card-header">Pair with another server</div>
             <div className="card-body">
@@ -227,7 +228,8 @@ function StatusNotices({
         <div className="alert alert-warning">
           <p>
             <strong>One more step:</strong> Multihelm needs admin access to this server to write the
-            master's vessel data, path metadata and source priorities here.
+            master's vessel data, path metadata and source priorities here, and to start and stop
+            the plugins that run on the master only.
           </p>
           <button
             type="button"
@@ -240,8 +242,8 @@ function StatusNotices({
             {allowing ? 'Allowing…' : 'Allow'}
           </button>
           <div className="small mt-2">
-            This approves the request “Multihelm: take the vessel settings over from the master”
-            under <a href="#/security/access/requests">Security → Access Requests</a>.
+            This approves Multihelm's own request under{' '}
+            <a href="#/security/access/requests">Security → Access Requests</a>.
           </div>
           {allowError && <div className="text-danger mt-2">{allowError}</div>}
         </div>
@@ -249,7 +251,8 @@ function StatusNotices({
       {own?.state === 'denied' && (
         <div className="alert alert-danger">
           The access request on this server was denied, so the vessel settings are not taken over
-          from the master. Save the settings below to ask again.
+          from the master and no plugin is switched for the master. Save the settings below to ask
+          again.
         </div>
       )}
     </>
@@ -470,6 +473,114 @@ function FoundServers({ status, busy, onPair }: PeerActions) {
         ))}
       </tbody>
     </table>
+  )
+}
+
+interface InstalledPlugin {
+  id: string
+  name: string
+}
+
+function installedPlugins(raw: unknown): InstalledPlugin[] {
+  if (!Array.isArray(raw)) {
+    return []
+  }
+  return raw
+    .filter(
+      (p): p is { id: string; name?: unknown } =>
+        typeof p === 'object' && p !== null && typeof (p as { id?: unknown }).id === 'string'
+    )
+    .filter((p) => p.id !== 'signalk-multihelm')
+    .map((p) => ({ id: p.id, name: typeof p.name === 'string' && p.name !== '' ? p.name : p.id }))
+    .sort((a, b) => a.name.localeCompare(b.name))
+}
+
+function MasterPluginsCard({ status, onSaved }: { status: Status; onSaved: () => Promise<void> }) {
+  const [plugins, setPlugins] = useState<InstalledPlugin[] | null>(null)
+  const [chosen, setChosen] = useState<string[] | null>(null)
+  const [saving, setSaving] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  useEffect(() => {
+    call('/skServer/plugins').then(
+      (raw) => {
+        setPlugins(installedPlugins(raw))
+      },
+      (e: unknown) => {
+        setError(`Cannot list the plugins: ${errorText(e)}`)
+      }
+    )
+  }, [])
+
+  const selected = chosen ?? status.masterPlugins
+  const unchanged =
+    chosen === null || [...chosen].sort().join() === [...status.masterPlugins].sort().join()
+  const missing = status.masterPlugins.filter((id) => !plugins?.some((p) => p.id === id))
+
+  const toggle = (id: string, on: boolean): void => {
+    setChosen(on ? [...selected, id] : selected.filter((x) => x !== id))
+  }
+
+  const saveList = async (): Promise<void> => {
+    setSaving(true)
+    setError(null)
+    try {
+      await call(`${BASE}/master-plugins`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ plugins: selected })
+      })
+      setChosen(null)
+      await onSaved()
+    } catch (e) {
+      setError(errorText(e))
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <div className="card mb-3">
+      <div className="card-header">Plugins that run on the master only</div>
+      <div className="card-body">
+        <p className="small text-body-secondary">
+          These plugins run on the boat&apos;s master and are stopped on the other servers, for
+          example an autopilot provider, so only one server sends its commands. The list is the same
+          on every server; when another server becomes the master, they move there.
+        </p>
+        {plugins === null && !error && <p className="text-body-secondary">Loading the plugins…</p>}
+        {plugins?.map((plugin) => (
+          <div className="form-check" key={plugin.id}>
+            <input
+              className="form-check-input"
+              type="checkbox"
+              id={`multihelm-master-plugin-${plugin.id}`}
+              checked={selected.includes(plugin.id)}
+              onChange={(e) => {
+                toggle(plugin.id, e.target.checked)
+              }}
+            />
+            <label className="form-check-label" htmlFor={`multihelm-master-plugin-${plugin.id}`}>
+              {plugin.name}
+            </label>
+          </div>
+        ))}
+        {plugins !== null && missing.length > 0 && (
+          <p className="small text-body-secondary mt-2">
+            Also on the list, not installed here: {missing.join(', ')}
+          </p>
+        )}
+        <button
+          type="button"
+          className="btn btn-primary mt-3"
+          disabled={saving || unchanged}
+          onClick={() => void saveList()}
+        >
+          {saving ? 'Saving…' : 'Save list'}
+        </button>
+        {error && <div className="alert alert-danger mt-3 mb-0">{error}</div>}
+      </div>
+    </div>
   )
 }
 
