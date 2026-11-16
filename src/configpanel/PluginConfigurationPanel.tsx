@@ -498,6 +498,7 @@ function installedPlugins(raw: unknown): InstalledPlugin[] {
 function MasterPluginsCard({ status, onSaved }: { status: Status; onSaved: () => Promise<void> }) {
   const [plugins, setPlugins] = useState<InstalledPlugin[] | null>(null)
   const [chosen, setChosen] = useState<string[] | null>(null)
+  const [unticked, setUnticked] = useState<string[]>([])
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
@@ -515,12 +516,15 @@ function MasterPluginsCard({ status, onSaved }: { status: Status; onSaved: () =>
   const selected = chosen ?? status.masterPlugins
   const unchanged =
     chosen === null || [...chosen].sort().join() === [...status.masterPlugins].sort().join()
-  const missing = [...new Set([...status.masterPlugins, ...selected])].filter(
+  const missing = [...new Set([...status.masterPlugins, ...selected, ...unticked])].filter(
     (id) => !plugins?.some((p) => p.id === id)
   )
 
   const toggle = (id: string, on: boolean): void => {
     setChosen(on ? [...selected, id] : selected.filter((x) => x !== id))
+    if (!on) {
+      setUnticked([...unticked, id])
+    }
   }
 
   const saveList = async (): Promise<void> => {
@@ -533,6 +537,7 @@ function MasterPluginsCard({ status, onSaved }: { status: Status; onSaved: () =>
         body: JSON.stringify({ plugins: selected })
       })
       setChosen(null)
+      setUnticked([])
       await onSaved()
     } catch (e) {
       setError(errorText(e))
