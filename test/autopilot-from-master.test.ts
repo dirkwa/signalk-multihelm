@@ -28,7 +28,8 @@ interface Command {
 describe("the master's autopilot on another server", () => {
   const commands: Command[] = []
   let security = false
-  let approval: 'PENDING' | 'APPROVED' = 'APPROVED'
+  let approval: 'PENDING' | 'APPROVED' | 'DENIED' = 'APPROVED'
+  let accessRequests = 0
   let state = 'standby'
   let master: { server: http.Server; url: string }
 
@@ -40,13 +41,19 @@ describe("the master's autopilot on another server", () => {
         res.sendStatus(404)
         return
       }
-      res.status(202).json({ state: 'PENDING', href: '/signalk/v1/requests/7' })
+      accessRequests++
+      setTimeout(
+        () => res.status(202).json({ state: 'PENDING', href: '/signalk/v1/requests/7' }),
+        20
+      )
     })
     app.get('/signalk/v1/requests/7', (_req, res) => {
       res.json(
-        approval === 'APPROVED'
-          ? { state: 'COMPLETED', accessRequest: { permission: 'APPROVED', token: 'rw-token' } }
-          : { state: 'PENDING', href: '/signalk/v1/requests/7' }
+        approval === 'PENDING'
+          ? { state: 'PENDING', href: '/signalk/v1/requests/7' }
+          : approval === 'APPROVED'
+            ? { state: 'COMPLETED', accessRequest: { permission: 'APPROVED', token: 'rw-token' } }
+            : { state: 'COMPLETED', accessRequest: { permission: 'DENIED' } }
       )
     })
     app.get(AUTOPILOTS_PATH, (_req, res) => {
@@ -95,6 +102,7 @@ describe("the master's autopilot on another server", () => {
     commands.length = 0
     security = false
     approval = 'APPROVED'
+    accessRequests = 0
     state = 'standby'
   })
 
@@ -217,5 +225,37 @@ describe("the master's autopilot on another server", () => {
     await expect(m.provider().engage('raymarine')).rejects.toThrow('no other server is the master')
     await m.autopilot.findDevices()
     expect(m.registered).toHaveLength(1)
+  })
+  it('asks the master once for callers that wait at the same time', async () => {
+    security = true
+    approval = 'PENDING'
+    const m = make('shared')
+    await Promise.all([m.autopilot.findDevices(), m.autopilot.findDevices()])
+    expect(accessRequests).toBe(1)
+    m.setMaster(true)
+    expect(m.autopilot.waitingForApproval()).toBeNull()
+  })
+
+  it('says so when the master denied the request', async () => {
+    security = true
+    approval = 'PENDING'
+    const m = make('denied')
+    await m.autopilot.findDevices()
+    approval = 'DENIED'
+    await expect(m.provider().engage('raymarine')).rejects.toThrow('denied')
+    expect(commands).toEqual([])
+  })
+
+  it('withdraws when stopped, also from a device search still under way', async () => {
+    const running = make('stopped')
+    await running.autopilot.findDevices()
+    running.autopilot.stop()
+    expect(running.withdrawn()).toBe(1)
+
+    const searching = make('stopped-searching')
+    const search = searching.autopilot.findDevices()
+    searching.autopilot.stop()
+    await search
+    expect(searching.registered).toEqual([])
   })
 })

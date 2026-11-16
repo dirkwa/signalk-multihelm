@@ -86,12 +86,17 @@ function valueOf(answer: unknown): unknown {
 
 export class MasterAutopilot {
   private registered = false
+  /** Counts withdrawals, so a read that outlived one publishes nothing. */
+  private withdrawals = 0
   private devices: string[] = []
   private readonly published = new Map<string, Record<string, Value>>()
   private control: ControlAccess | null
   private stateTimer: NodeJS.Timeout | null = null
   private devicesTimer: NodeJS.Timeout | null = null
   private polling = false
+  private stopped = false
+  /** One access request or poll at a time, shared by everyone waiting for it. */
+  private asking: { masterId: string; token: Promise<string | null> } | null = null
 
   constructor(private readonly host: AutopilotHost) {
     this.control = host.store.loadControlAccess()
@@ -99,12 +104,12 @@ export class MasterAutopilot {
 
   start(): void {
     this.devicesTimer = setInterval(() => {
-      void this.findDevices()
+      this.run(() => this.findDevices())
     }, DEVICES_POLL_MS)
     this.stateTimer = setInterval(() => {
-      void this.pollState()
+      this.run(() => this.pollState())
     }, STATE_POLL_MS)
-    void this.findDevices()
+    this.run(() => this.findDevices())
   }
 
   stop(): void {
@@ -115,6 +120,8 @@ export class MasterAutopilot {
     }
     this.devicesTimer = null
     this.stateTimer = null
+    this.stopped = true
+    this.withdraw()
   }
 
   /**
@@ -125,13 +132,13 @@ export class MasterAutopilot {
     if (this.host.isMaster()) {
       this.withdraw()
     } else {
-      void this.findDevices()
+      this.run(() => this.findDevices())
     }
   }
 
   /** The user has to approve this server's request on the master to send it commands. */
   waitingForApproval(): { masterId: string; request: string } | null {
-    return this.control?.state === 'waiting-approval'
+    return !this.host.isMaster() && this.control?.state === 'waiting-approval'
       ? { masterId: this.control.masterId, request: this.requestId() }
       : null
   }
@@ -157,7 +164,7 @@ export class MasterAutopilot {
       return
     }
     const devices = isRecord(answer) ? Object.keys(answer).sort() : []
-    if (devices.length === 0 || this.host.isMaster()) {
+    if (this.stopped || devices.length === 0 || this.host.isMaster()) {
       return
     }
     this.devices = devices
@@ -173,6 +180,7 @@ export class MasterAutopilot {
       return
     }
     this.polling = true
+    const withdrawals = this.withdrawals
     try {
       for (const device of this.devices) {
         let info: AutopilotInfo
@@ -183,6 +191,9 @@ export class MasterAutopilot {
             `Multihelm: the state of the master's autopilot ${device}: ${errorText(error)}`
           )
           continue
+        }
+        if (withdrawals !== this.withdrawals) {
+          return
         }
         const update: Record<string, Value> = {
           state: info.state,
@@ -208,6 +219,7 @@ export class MasterAutopilot {
     if (this.registered) {
       this.host.unregister()
       this.registered = false
+      this.withdrawals++
       this.published.clear()
     }
   }
@@ -244,7 +256,9 @@ export class MasterAutopilot {
     if (token === null) {
       throw new AutopilotError(
         403,
-        `approve Multihelm's request "${this.requestId()}" under Security -> Access Requests on the master to steer from this station`
+        this.control?.state === 'denied'
+          ? "the master denied Multihelm's request to steer its autopilot; restart Multihelm to ask again"
+          : `approve Multihelm's request "${this.requestId()}" under Security -> Access Requests on the master to steer from this station`
       )
     }
     try {
@@ -261,7 +275,13 @@ export class MasterAutopilot {
       }
       throw this.asAutopilotError(error)
     }
-    void this.pollState()
+    this.run(() => this.pollState())
+  }
+
+  private run(work: () => Promise<void>): void {
+    work().catch((error: unknown) => {
+      this.host.error(`Multihelm: the master's autopilot: ${errorText(error)}`)
+    })
   }
 
   private asAutopilotError(error: unknown): AutopilotError {
@@ -278,7 +298,19 @@ export class MasterAutopilot {
   }
 
   /** The readwrite token on the master, asked for when there is none; null until approved. */
-  private async controlToken(master: MasterOfBoat): Promise<string | null> {
+  private controlToken(master: MasterOfBoat): Promise<string | null> {
+    if (this.asking?.masterId !== master.id) {
+      const token = this.askControl(master).finally(() => {
+        if (this.asking?.token === token) {
+          this.asking = null
+        }
+      })
+      this.asking = { masterId: master.id, token }
+    }
+    return this.asking.token
+  }
+
+  private async askControl(master: MasterOfBoat): Promise<string | null> {
     if (this.control && this.control.masterId !== master.id) {
       this.saveControl(null)
     }
