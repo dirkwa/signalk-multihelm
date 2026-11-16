@@ -3,24 +3,17 @@
  * and source priorities over from the master. They are read from the
  * master with the pairing token and written here through this server's own
  * REST API, the way its settings pages write them, so they survive a
- * restart. Writing needs an admin device token on this server, asked for
- * once; until it is approved nothing is written. Metadata of a path the
+ * restart, with this server's admin device token on itself. Metadata of a path the
  * master has none for stays as it is, unless it was the master's before.
  */
 
 import { isDeepStrictEqual } from 'node:util'
 
 import type { MasterAccess } from './master-proxy.js'
-import {
-  PeerHttpError,
-  callServer,
-  fetchVesselSettings,
-  pollAccess,
-  requestAccess,
-  type AccessRequestResult
-} from './peer-client.js'
+import type { OwnServerAccess } from './own-access.js'
+import { PeerHttpError, callServer, fetchVesselSettings } from './peer-client.js'
 import type { SourcePriorities } from './source-priorities.js'
-import type { MultihelmStore, OwnAccess } from './store.js'
+import type { MultihelmStore } from './store.js'
 import {
   VESSEL_FIELDS,
   parseVesselSettings,
@@ -30,7 +23,7 @@ import {
 
 export interface FollowHost {
   store: MultihelmStore
-  serverId: string
+  access: OwnServerAccess
   /** This server, over loopback: `http(s)://127.0.0.1:<port>`. */
   ownUrl: () => string
   /** What this server holds now; null when the server does not expose it. */
@@ -101,7 +94,6 @@ function metaUrl(base: string, path: string): string {
 }
 
 export class MasterFollower {
-  private access: OwnAccess
   private readonly prioritiesWritten = new WrittenValues()
   private readonly metaWritten = new WrittenValues()
   /**
@@ -113,25 +105,9 @@ export class MasterFollower {
   private followedMetaSaved: string
 
   constructor(private readonly host: FollowHost) {
-    this.access = host.store.loadOwnAccess()
     const followed = host.store.loadFollowedMeta()
     this.followedMeta = new Set(followed)
     this.followedMetaSaved = JSON.stringify(followed.sort())
-  }
-
-  /** Whether the user has to approve this server's own access request. */
-  waitingForApproval(): boolean {
-    return this.access.state === 'waiting-approval'
-  }
-
-  /** The identifier of the access request on this server, as Security -> Access Requests lists it. */
-  accessRequestId(): string {
-    return `signalk-multihelm-self-${this.host.serverId}`
-  }
-
-  /** Whether the user denied it; it is asked for again only after a restart. */
-  denied(): boolean {
-    return this.access.state === 'denied'
   }
 
   async run(): Promise<void> {
@@ -170,7 +146,7 @@ export class MasterFollower {
     if (!vesselChanged && metaChanged.length === 0 && !priorities) {
       return
     }
-    const token = await this.ownToken()
+    const token = await this.host.access.token()
     if (token === null) {
       return
     }
@@ -192,7 +168,7 @@ export class MasterFollower {
       }
     } catch (error) {
       if (error instanceof PeerHttpError && (error.status === 401 || error.status === 403)) {
-        this.setAccess({ token: '', state: 'none' })
+        this.host.access.revoked()
       }
       this.host.error(`Multihelm: taking over the master's vessel settings: ${errorText(error)}`)
     }
@@ -234,53 +210,5 @@ export class MasterFollower {
       body[key] = vessel[key]
     }
     await callServer('PUT', `${base}/skServer/vessel`, token, body)
-  }
-
-  private setAccess(access: OwnAccess): void {
-    this.access = access
-    this.host.store.saveOwnAccess(access)
-  }
-
-  private async ownToken(): Promise<string | null> {
-    const base = this.host.ownUrl()
-    if (this.access.state === 'granted') {
-      return this.access.token
-    }
-    if (this.access.state === 'denied') {
-      return null
-    }
-    let result: AccessRequestResult
-    try {
-      result =
-        this.access.state === 'waiting-approval' && this.access.requestHref
-          ? await pollAccess({ url: base }, this.access.requestHref)
-          : await requestAccess(
-              { url: base },
-              this.accessRequestId(),
-              'Multihelm: take the vessel settings over from the master',
-              'admin'
-            )
-    } catch (error) {
-      this.host.debug(`Multihelm: access request on this server: ${errorText(error)}`)
-      return null
-    }
-    switch (result.kind) {
-      case 'no-security':
-        this.setAccess({ token: '', state: 'granted' })
-        return ''
-      case 'approved':
-        this.setAccess({ token: result.token, state: 'granted' })
-        return result.token
-      case 'pending':
-        this.setAccess({ token: '', requestHref: result.href, state: 'waiting-approval' })
-        return null
-      case 'denied':
-        this.host.store.saveOwnAccess({ token: '', state: 'none' })
-        this.access = { token: '', state: 'denied' }
-        return null
-      case 'error':
-        this.host.debug(`Multihelm: access request on this server: ${result.message}`)
-        return null
-    }
   }
 }

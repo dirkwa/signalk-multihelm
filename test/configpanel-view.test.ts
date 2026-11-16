@@ -25,6 +25,7 @@ function status(over: Partial<Status> = {}): Status {
     pairedBy: [],
     discovered: [],
     ownAccess: null,
+    masterPlugins: [],
     ...over
   }
 }

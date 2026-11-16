@@ -356,6 +356,24 @@ describe('the master role', () => {
     member.dataset.list = list
   })
 
+  it('moves at once when a paired server becomes the master', async () => {
+    let isMaster = false
+    const salon = await make('role-now-salon', () => isMaster)
+    const port = await make('role-now-port', false)
+    await port.mh.pair(salon.url)
+    await salon.mh.pair(port.url)
+    await port.mh.checkMasters()
+    expect(port.mh.roleKnown()).toBe(true)
+    expect(port.mh.master()).toBeNull()
+
+    isMaster = true
+    // The salon asks the port for its hello, saying it is now the master.
+    await salon.mh.checkMasters()
+    await vi.waitFor(() => {
+      expect(port.mh.master()).toMatchObject({ name: 'role-now-salon' })
+    })
+  })
+
   it('tells status listeners when a conflict ends, though the role stays', async () => {
     const set = new Map<string, boolean>([
       ['role-c-x', true],

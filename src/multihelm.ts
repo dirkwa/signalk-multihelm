@@ -197,6 +197,9 @@ export class Multihelm {
   private announcedStatus = ''
   private masterTimer: NodeJS.Timeout | null = null
   private checkingMasters = false
+  private checkMastersAgain = false
+  /** Whether the paired peers were asked once since the start, so the role is known. */
+  private mastersChecked = false
   private pairingTimer: NodeJS.Timeout | null = null
   private pollingPairings = false
   readonly serverId: string
@@ -221,6 +224,7 @@ export class Multihelm {
       })
     }
     this.timer = setTimeout(tick, 0)
+    void this.checkMasters()
     this.masterTimer = setInterval(() => {
       void this.checkMasters()
     }, MASTER_CHECK_INTERVAL_MS)
@@ -261,7 +265,11 @@ export class Multihelm {
    * for a round nor races one.
    */
   async checkMasters(): Promise<void> {
-    if (this.checkingMasters || this.stopped) {
+    if (this.stopped) {
+      return
+    }
+    if (this.checkingMasters) {
+      this.checkMastersAgain = true
       return
     }
     this.checkingMasters = true
@@ -299,9 +307,20 @@ export class Multihelm {
       this.checkingMasters = false
     }
     // stop() may have run during the awaits above.
-    if (!(this.stopped as boolean)) {
-      this.announceRole()
+    if (this.stopped as boolean) {
+      return
     }
+    this.mastersChecked = true
+    this.announceRole()
+    if (this.checkMastersAgain) {
+      this.checkMastersAgain = false
+      await this.checkMasters()
+    }
+  }
+
+  /** Whether the role is known: the paired peers were asked since the start. */
+  roleKnown(): boolean {
+    return this.mastersChecked
   }
 
   /**
@@ -554,7 +573,12 @@ export class Multihelm {
   }
 
   private helloFrom(): HelloFrom {
-    return { serverId: this.serverId, name: this.host.serverName(), ...this.versions() }
+    return {
+      serverId: this.serverId,
+      name: this.host.serverName(),
+      master: this.host.isMaster(),
+      ...this.versions()
+    }
   }
 
   private answered(url: string, hello: Hello): void {
@@ -593,6 +617,11 @@ export class Multihelm {
       known.multihelm !== server.multihelm
     if (changed || now - this.pairedBySavedAt >= PAIRED_BY_SAVE_MS) {
       this.savePairedBySoon()
+    }
+    // A server that became or stopped being the master says so at once, so the role moves in seconds.
+    const peer = this.peers.find((p) => p.state === 'paired' && p.id === from.serverId)
+    if (peer && from.master !== undefined && this.masterSeen.has(peer.url) !== from.master) {
+      void this.checkMasters()
     }
   }
 

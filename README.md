@@ -82,6 +82,27 @@ from the transfers, and a master that has not answered for two and a half
 minutes no longer counts.
 When several servers are set, the one with the smallest server id is the
 master, and the plugin status says to set one only.
+A server that is set to be the master, or no longer is, says so when it
+next asks its peers, which it does right after the setting changes, so the
+role moves within seconds.
+
+## Plugins that run on the master only
+
+Some plugins must run on one server only: an autopilot provider, for
+example, so that only one server sends commands to the autopilot. Tick them
+under **Plugins that run on the master only** in Multihelm's settings. The
+list is the same on every server: it is kept in step like the routes, so it
+can be changed on any of them, and a server that becomes the master already
+knows it.
+
+Each server starts those plugins while it is the master and stops them
+while another server is, through its own plugin settings, as the admin UI
+does: it shows them as disabled on the other servers, and they stay so
+across a restart. Their own settings are left as they are, so set them up
+on every server that may become the master. While no master is found,
+nothing is switched. While another server is the master, a plugin on the
+list turned on by hand here is turned off again within a minute. Switching uses the same admin access as
+taking the vessel settings over (see below), on the master too.
 
 ## Vessel data, metadata and source priorities from the master
 
