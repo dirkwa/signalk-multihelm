@@ -20,6 +20,7 @@ import {
   type PeerInfo,
   type Role
 } from './api.js'
+import { MasterAutopilot } from './autopilot-from-master.js'
 import { ServerDiscovery } from './discovery.js'
 import { ConfigSchema } from './config.js'
 import { MasterFollower } from './follow-master.js'
@@ -56,6 +57,7 @@ type Config = {
   followMetadata?: unknown
   followSourcePriorities?: unknown
   historyFromMaster?: unknown
+  autopilotFromMaster?: unknown
 }
 
 const APPROVE_HINT =
@@ -91,6 +93,18 @@ type Host = ServerAPI & {
   }
 }
 
+/** Registering is plugin API; withdrawing before the plugin stops is reached on the server's own autopilot API. */
+function autopilotWithdrawal(app: ServerAPI): (() => void) | null {
+  const api = (app as { autopilotApi?: { unRegister?: unknown } }).autopilotApi
+  const unRegister = api?.unRegister
+  if (typeof app.registerAutopilotProvider !== 'function' || typeof unRegister !== 'function') {
+    return null
+  }
+  return () => {
+    unRegister.call(api, PLUGIN_ID)
+  }
+}
+
 /** The server takes the source policy of a plugin's subscription as an argument, not from the command. */
 interface SourcePolicySubscriptions {
   subscribe: (
@@ -112,6 +126,7 @@ export default function (app: ServerAPI): Plugin {
   let stopFollowing: (() => void) | null = null
   let ownAccess: OwnServerAccess | null = null
   let masterPluginList: MasterPluginList | null = null
+  let masterAutopilot: MasterAutopilot | null = null
 
   function localVesselSettings(): VesselSettings | null {
     const deltas = host.config?.baseDeltaEditor?.deltas
@@ -354,6 +369,38 @@ export default function (app: ServerAPI): Plugin {
           )
         })
       }
+      const withdrawAutopilot = autopilotWithdrawal(app)
+      const autopilot =
+        settings.autopilotFromMaster !== false && withdrawAutopilot
+          ? new MasterAutopilot({
+              store,
+              serverId: mh.serverId,
+              master: () => {
+                const access = mh.masterAccess()
+                const master = mh.master()
+                return access && master ? { id: master.id, access } : null
+              },
+              isMaster: () => mh.role() === 'master',
+              register: (provider, devices) => {
+                app.registerAutopilotProvider(provider, devices)
+              },
+              unregister: withdrawAutopilot,
+              update: (device, info) => {
+                app.autopilotUpdate(device, info)
+              },
+              debug: (msg) => {
+                app.debug(msg)
+              },
+              error: (msg) => {
+                app.error(msg)
+              }
+            })
+          : null
+      masterAutopilot = autopilot
+      autopilot?.start()
+      const stopRoleAutopilot = mh.onRoleChanged(() => {
+        autopilot?.roleChanged()
+      })
       const historyTimer = setInterval(checkHistory, ROUND_INTERVAL_MS)
       const stopRoleHistory = mh.onRoleChanged(checkHistory)
       checkHistory()
@@ -361,6 +408,8 @@ export default function (app: ServerAPI): Plugin {
         clearInterval(pluginsTimer)
         stopRolePlugins()
         settingsHandle.unregister()
+        stopRoleAutopilot()
+        autopilot?.stop()
         clearInterval(followTimer)
         stopRoleFollow()
         clearInterval(historyTimer)
@@ -377,6 +426,7 @@ export default function (app: ServerAPI): Plugin {
       stopFollowing = null
       ownAccess = null
       masterPluginList = null
+      masterAutopilot = null
       stopRoleStatus?.()
       stopRoleStatus = null
       if (multihelm) {
@@ -398,7 +448,8 @@ export default function (app: ServerAPI): Plugin {
         localVesselSettings,
         () => masterProxy,
         ownAccessState,
-        () => masterPluginList
+        () => masterPluginList,
+        () => masterAutopilot?.waitingForApproval() ?? null
       )
     }
   }

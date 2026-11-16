@@ -69,7 +69,8 @@ export function registerRoutes(
   vesselSettings: () => VesselSettings | null = () => null,
   masterProxy: () => MasterProxy | null = () => null,
   ownAccess: () => OwnAccessState = () => null,
-  masterPlugins: () => MasterPluginList | null = () => null
+  masterPlugins: () => MasterPluginList | null = () => null,
+  controlAccess: () => Status['controlAccess'] = () => null
 ): void {
   const scoped = (router as RouterWithAccess).access
   const available = typeof scoped === 'function'
@@ -185,7 +186,8 @@ export function registerRoutes(
       pairedBy: mh?.pairedByInfo() ?? [],
       discovered: mh ? discovered() : [],
       ownAccess: mh ? ownAccess() : null,
-      masterPlugins: masterPlugins()?.ids() ?? []
+      masterPlugins: masterPlugins()?.ids() ?? [],
+      controlAccess: mh ? controlAccess() : null
     }
     res.json(status)
   })

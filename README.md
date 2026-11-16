@@ -145,6 +145,28 @@ credentials, and the route follows this server's own security: whoever may
 not read here cannot read through it either. While no other server is the
 master, it answers 503.
 
+## The autopilot from every station
+
+Only one server may send commands to the autopilot, but it should be
+operated from the chartplotter at any station. On the servers that are not
+the master, Multihelm serves the master's autopilot in their own Autopilot
+API: it registers as their autopilot provider for the master's autopilot
+devices and sends every command (engage, standby, mode, course changes,
+tack, gybe, dodge) on to the master's Autopilot API. It reads the master's
+autopilot state every second and publishes it on its own server, so a
+chartplotter there shows it as on the master. Autopilot alarms are not
+passed on yet.
+
+Run the autopilot provider plugin on the master only (see _Plugins that run
+on the master only_), so the other servers do not drive the autopilot
+themselves. Commands need write access on the master: when a server first
+finds an autopilot there, Multihelm asks the master for it, and the request
+waits under **Security -> Access Requests** on the master until it is
+approved. Its settings on the other servers show which request to approve.
+On the master itself Multihelm steps aside, so its own provider serves.
+Turn it off per server with **Operate the master's autopilot from this
+server**.
+
 ## History from the master
 
 While the master has a History API provider (signalk-questdb, for example),

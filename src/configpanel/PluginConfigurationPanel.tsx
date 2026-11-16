@@ -42,7 +42,8 @@ function withDefaults(configuration: Settings | undefined): Required<Settings> {
     followVessel: configuration?.followVessel !== false,
     followMetadata: configuration?.followMetadata !== false,
     followSourcePriorities: configuration?.followSourcePriorities !== false,
-    historyFromMaster: configuration?.historyFromMaster !== false
+    historyFromMaster: configuration?.historyFromMaster !== false,
+    autopilotFromMaster: configuration?.autopilotFromMaster !== false
   }
 }
 
@@ -246,6 +247,13 @@ function StatusNotices({
             <a href="#/security/access/requests">Security → Access Requests</a>.
           </div>
           {allowError && <div className="text-danger mt-2">{allowError}</div>}
+        </div>
+      )}
+      {status.controlAccess && (
+        <div className="alert alert-warning">
+          To operate the autopilot from this station, approve Multihelm&apos;s request{' '}
+          <code>{status.controlAccess.request}</code> under Security → Access Requests on the
+          master, {status.master?.name ?? 'the master'}.
         </div>
       )}
       {own?.state === 'denied' && (
@@ -670,6 +678,12 @@ function SettingsCard({ configuration, save }: Props) {
           'historyFromMaster',
           "Answer this server's History API from the master",
           "While the master has a history provider (signalk-questdb, for example), history graphs on this server show the master's history, so it is kept once on the boat. Needs Signal K 2.32.0 or later.",
+          onMaster
+        )}
+        {option(
+          'autopilotFromMaster',
+          "Operate the master's autopilot from this server",
+          "A chartplotter here operates the master's autopilot, while only the master sends to it. Put the autopilot provider plugin on the list of plugins that run on the master only.",
           onMaster
         )}
         <button

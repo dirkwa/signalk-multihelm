@@ -54,6 +54,21 @@ export const OwnAccessSchema = Type.Object({
 
 export type OwnAccess = Static<typeof OwnAccessSchema>
 
+/** A readwrite device token on the master, for sending it commands such as the autopilot's. */
+export const ControlAccessSchema = Type.Object({
+  /** The master's server id: a token for one master is no use for another. */
+  masterId: Type.String(),
+  token: Type.String(),
+  requestHref: Type.Optional(Type.String()),
+  state: Type.Union([
+    Type.Literal('waiting-approval'),
+    Type.Literal('granted'),
+    Type.Literal('denied')
+  ])
+})
+
+export type ControlAccess = Static<typeof ControlAccessSchema>
+
 const PathsFileSchema = Type.Array(Type.String())
 
 /** A server that asked this one for its `hello`, which a server does while paired with it. */
@@ -130,6 +145,20 @@ export class MultihelmStore {
 
   saveOwnAccess(access: OwnAccess): void {
     writeAtomic(path.join(this.dir, 'own-access.json'), JSON.stringify(access), 0o600)
+  }
+
+  loadControlAccess(): ControlAccess | null {
+    const raw = readJson(path.join(this.dir, 'control-access.json'))
+    return Value.Check(ControlAccessSchema, raw) ? raw : null
+  }
+
+  saveControlAccess(access: ControlAccess | null): void {
+    const file = path.join(this.dir, 'control-access.json')
+    if (access === null) {
+      fs.rmSync(file, { force: true })
+      return
+    }
+    writeAtomic(file, JSON.stringify(access), 0o600)
   }
 
   /** The paths whose metadata this server takes over from the master. */
