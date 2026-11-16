@@ -36,6 +36,12 @@ export const ConfigSchema = Type.Object({
     description:
       "While the master has a history provider (signalk-questdb, for example), history graphs on this server show the master's history, so it is kept once on the boat. Does nothing on the master, while the master has no history, or before Signal K 2.32.0.",
     default: true
+  }),
+  autopilotFromMaster: Type.Boolean({
+    title: "Operate the master's autopilot from this server",
+    description:
+      "This server's Autopilot API serves the master's autopilot, so a chartplotter here operates it, while only the master sends to it. Put the autopilot provider plugin on the list of plugins that run on the master only. Does nothing on the master.",
+    default: true
   })
 })
 

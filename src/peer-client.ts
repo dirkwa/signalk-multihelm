@@ -354,6 +354,27 @@ export async function callServer(
   }
 }
 
+/** A request to a paired peer's REST API, trusted as when it was paired; throws on any status but 2xx. */
+export async function callPeer(
+  method: 'GET' | 'POST' | 'PUT' | 'DELETE',
+  peer: PeerAddress,
+  path: string,
+  token: string,
+  body?: unknown
+): Promise<unknown> {
+  const url = `${peer.url}${path}`
+  const res = await send(method, url, { token, body, ca: peer.ca })
+  const text = await readBody(res)
+  if (res.status < 200 || res.status >= 300) {
+    throw new PeerHttpError(res.status, `HTTP ${String(res.status)} from ${method} ${url}`)
+  }
+  try {
+    return JSON.parse(text) as unknown
+  } catch {
+    return text
+  }
+}
+
 /** A page of a peer's dataset changes; its entries are checked by the caller. */
 export async function fetchManifest(
   peer: PeerAddress,
@@ -428,7 +449,7 @@ export async function requestAccess(
   peer: PeerAddress,
   clientId: string,
   description: string,
-  permissions: 'readonly' | 'admin' = 'readonly'
+  permissions: 'readonly' | 'readwrite' | 'admin' = 'readonly'
 ): Promise<AccessRequestResult> {
   const res = await send('POST', `${peer.url}/signalk/v1/access/requests`, {
     body: { clientId, description, permissions },
