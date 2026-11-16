@@ -335,4 +335,22 @@ describe('the resources dataset', () => {
     expect(entries.map((e) => e.key)).toContain(`routes/${ROUTE}`)
     expect(read(entries.find((e) => e.key === `routes/${ROUTE}`))).toEqual({ name: 'Marina' })
   })
+
+  it('does not bring back a resource deleted here while a peer write was being confirmed', async () => {
+    fake.lag = false
+    fake.whileListing = () => {
+      fake.whileListing = undefined
+      Reflect.deleteProperty(fake.store.waypoints, WAYPOINT)
+      void sync.deleted('waypoints', WAYPOINT)
+    }
+    const incoming = path.join(dir, 'incoming.json')
+    fs.writeFileSync(incoming, JSON.stringify({ name: 'Anchorage' }))
+    await dataset.apply({
+      key: `waypoints/${WAYPOINT}`,
+      meta: null,
+      files: [{ name: 'resource.json', path: incoming, size: 0, sha256: '', unchanged: false }]
+    })
+
+    expect(await dataset.list()).toEqual([])
+  })
 })

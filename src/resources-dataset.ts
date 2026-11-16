@@ -213,13 +213,21 @@ export function resourcesDataset(host: ResourcesHost): ResourcesDataset {
   }
 
   /** The Resources API answers before the provider has written: wait until it has. */
-  async function whenStored(type: ResourceType, id: string, text: string): Promise<void> {
-    for (let check = 0; check < STORED_CHECKS; check++) {
+  async function whenStored(
+    type: ResourceType,
+    id: string,
+    text: string,
+    wanted: () => boolean
+  ): Promise<void> {
+    for (let check = 0; check < STORED_CHECKS && wanted(); check++) {
       const resource = (await host.list(type))[id]
       if (isRecord(resource) && resourceText(resource) === text) {
         return
       }
       await sleep(STORED_CHECK_MS)
+    }
+    if (!wanted()) {
+      return
     }
     throw new Error(`the server did not store ${type}/${id}`)
   }
@@ -289,9 +297,15 @@ export function resourcesDataset(host: ResourcesHost): ResourcesDataset {
       }
       const text = resourceText(resource)
       deletedHere.delete(entry.key)
+      const setAt = deletions
+      const notDeletedSince = (): boolean => (deletedAt.get(entry.key) ?? 0) <= setAt
       await host.set(type, id, resource)
-      await whenStored(type, id, text)
-      await exclusive(() => mirror(type, id, text))
+      await whenStored(type, id, text, notDeletedSince)
+      await exclusive(async () => {
+        if (notDeletedSince()) {
+          await mirror(type, id, text)
+        }
+      })
     },
 
     /**
