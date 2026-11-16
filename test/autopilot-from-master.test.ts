@@ -30,6 +30,9 @@ describe("the master's autopilot on another server", () => {
   let security = false
   let approval: 'PENDING' | 'APPROVED' | 'DENIED' = 'APPROVED'
   let accessRequests = 0
+  /** The slow master answers once this settles. */
+  let slowAnswer: Promise<void> = Promise.resolve()
+  let answerSlow: () => void = () => undefined
   let state = 'standby'
   let master: { server: http.Server; url: string }
 
@@ -48,10 +51,10 @@ describe("the master's autopilot on another server", () => {
       )
     })
     app.post('/slow/signalk/v1/access/requests', (_req, res) => {
-      setTimeout(
-        () => res.status(202).json({ state: 'PENDING', href: '/signalk/v1/requests/9' }),
-        60
-      )
+      void slowAnswer.then(() => res.status(202).json({ state: 'PENDING', href: '/r/9' }))
+    })
+    app.get(`/slow${AUTOPILOTS_PATH}`, (_req, res) => {
+      void slowAnswer.then(() => res.json({ raymarine: { provider: 'raymarine-autopilot' } }))
     })
     app.get('/signalk/v1/requests/7', (_req, res) => {
       res.json(
@@ -110,6 +113,9 @@ describe("the master's autopilot on another server", () => {
     approval = 'APPROVED'
     accessRequests = 0
     state = 'standby'
+    slowAnswer = new Promise((resolve) => {
+      answerSlow = resolve
+    })
   })
 
   interface Made {
@@ -255,7 +261,7 @@ describe("the master's autopilot on another server", () => {
     expect(m.autopilot.waitingForApproval()).toBeNull()
   })
 
-  it('asks each master once, also when the master changes back while it asks', async () => {
+  it('asks the current master once, also when the master changes back while it asks', async () => {
     security = true
     approval = 'PENDING'
     const m = make('per-master')
@@ -265,7 +271,7 @@ describe("the master's autopilot on another server", () => {
     m.setMasterId('salon')
     asked.push(m.autopilot.findDevices())
     await Promise.all(asked)
-    expect(accessRequests).toBe(2)
+    expect(accessRequests).toBe(1)
   })
 
   it("keeps the current master's request when an earlier master answers late", async () => {
@@ -280,8 +286,24 @@ describe("the master's autopilot on another server", () => {
       .catch(() => undefined)
     m.setMasterId('salon')
     await m.autopilot.findDevices()
+    answerSlow()
     await late
     expect(m.autopilot.waitingForApproval()?.masterId).toBe('salon')
+  })
+
+  it("keeps the current master's access when an earlier master's autopilots answer late", async () => {
+    security = true
+    const m = make('late-devices')
+    m.setMasterId('slow')
+    const late = m.autopilot.findDevices()
+    m.setMasterId('salon')
+    await m.autopilot.findDevices()
+    await m.provider().engage('raymarine')
+    answerSlow()
+    await late
+    await m.provider().engage('raymarine')
+    expect(commands.map((c) => c.auth)).toEqual(['Bearer rw-token', 'Bearer rw-token'])
+    expect(accessRequests).toBe(1)
   })
 
   it('says so when the master denied the request', async () => {
