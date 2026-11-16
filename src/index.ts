@@ -21,6 +21,7 @@ import {
   type Role
 } from './api.js'
 import { MasterAutopilot } from './autopilot-from-master.js'
+import { MasterControlAccess } from './master-control.js'
 import { ServerDiscovery } from './discovery.js'
 import { ConfigSchema } from './config.js'
 import { MasterFollower } from './follow-master.js'
@@ -126,7 +127,7 @@ export default function (app: ServerAPI): Plugin {
   let stopFollowing: (() => void) | null = null
   let ownAccess: OwnServerAccess | null = null
   let masterPluginList: MasterPluginList | null = null
-  let masterAutopilot: MasterAutopilot | null = null
+  let masterControl: MasterControlAccess | null = null
 
   function localVesselSettings(): VesselSettings | null {
     const deltas = host.config?.baseDeltaEditor?.deltas
@@ -369,12 +370,20 @@ export default function (app: ServerAPI): Plugin {
           )
         })
       }
+      const control = new MasterControlAccess({
+        store,
+        serverId: mh.serverId,
+        currentMaster: () => (mh.role() === 'master' ? null : (mh.master()?.id ?? null)),
+        debug: (msg) => {
+          app.debug(msg)
+        }
+      })
+      masterControl = control
       const withdrawAutopilot = autopilotWithdrawal(app)
       const autopilot =
         settings.autopilotFromMaster !== false && withdrawAutopilot
           ? new MasterAutopilot({
-              store,
-              serverId: mh.serverId,
+              control,
               master: () => {
                 const access = mh.masterAccess()
                 const master = mh.master()
@@ -396,7 +405,6 @@ export default function (app: ServerAPI): Plugin {
               }
             })
           : null
-      masterAutopilot = autopilot
       autopilot?.start()
       const stopRoleAutopilot = mh.onRoleChanged(() => {
         autopilot?.roleChanged()
@@ -426,7 +434,7 @@ export default function (app: ServerAPI): Plugin {
       stopFollowing = null
       ownAccess = null
       masterPluginList = null
-      masterAutopilot = null
+      masterControl = null
       stopRoleStatus?.()
       stopRoleStatus = null
       if (multihelm) {
@@ -449,7 +457,7 @@ export default function (app: ServerAPI): Plugin {
         () => masterProxy,
         ownAccessState,
         () => masterPluginList,
-        () => masterAutopilot?.waitingForApproval() ?? null
+        () => masterControl?.waitingForApproval(multihelm?.role() === 'master') ?? null
       )
     }
   }

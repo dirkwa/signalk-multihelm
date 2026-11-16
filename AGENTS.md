@@ -54,9 +54,12 @@ sets by hand on one server (see `README.md`).
   kept in step as the `signalk-multihelm/settings` dataset, and
   `MasterOnlyPlugins`, which switches them through `/plugins/<id>/config`
   once the role is known, and not at all while no master is found.
+- `master-control.ts` — `MasterControlAccess`: this server's readwrite
+  device token on the master, for the commands a station sends there; one
+  request at a time, kept per master.
 - `autopilot-from-master.ts` — `MasterAutopilot`: on a member, registers
   as the autopilot provider for the master's devices and sends every command
-  to the master's Autopilot API with a readwrite device token there (asked
+  to the master's Autopilot API with the control token there (asked
   for when an autopilot is first found); publishes the master's state each
   second. Steps aside (`autopilotApi.unRegister`) the moment this server
   becomes the master, before its own provider starts.

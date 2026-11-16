@@ -14,6 +14,7 @@ import {
   MasterAutopilot,
   type AutopilotHost
 } from '../src/autopilot-from-master.js'
+import { MasterControlAccess } from '../src/master-control.js'
 import { MultihelmStore } from '../src/store.js'
 
 const root = fs.mkdtempSync(path.join(os.tmpdir(), 'multihelm-autopilot-'))
@@ -120,6 +121,7 @@ describe("the master's autopilot on another server", () => {
 
   interface Made {
     autopilot: MasterAutopilot
+    waiting: () => { masterId: string; request: string } | null
     provider: () => AutopilotProvider
     registered: string[][]
     updates: { device: string; info: Record<string, Value> }[]
@@ -135,9 +137,14 @@ describe("the master's autopilot on another server", () => {
     let withdrawn = 0
     let isMaster = false
     let masterId = 'salon'
-    const host: AutopilotHost = {
+    const control = new MasterControlAccess({
       store: new MultihelmStore(path.join(root, name)),
       serverId: 'port',
+      currentMaster: () => (isMaster ? null : masterId),
+      debug: () => undefined
+    })
+    const host: AutopilotHost = {
+      control,
       master: () =>
         isMaster
           ? null
@@ -164,6 +171,7 @@ describe("the master's autopilot on another server", () => {
     }
     return {
       autopilot: new MasterAutopilot(host),
+      waiting: () => control.waitingForApproval(isMaster),
       provider: () => {
         if (!provider) {
           throw new Error('not registered')
@@ -228,7 +236,7 @@ describe("the master's autopilot on another server", () => {
     approval = 'PENDING'
     const m = make('secure')
     await m.autopilot.findDevices()
-    expect(m.autopilot.waitingForApproval()).toEqual({
+    expect(m.waiting()).toEqual({
       masterId: 'salon',
       request: 'signalk-multihelm-control-port'
     })
@@ -238,7 +246,7 @@ describe("the master's autopilot on another server", () => {
     approval = 'APPROVED'
     await m.provider().engage('raymarine')
     expect(commands.map((c) => c.auth)).toEqual(['Bearer rw-token'])
-    expect(m.autopilot.waitingForApproval()).toBeNull()
+    expect(m.waiting()).toBeNull()
   })
 
   it('steps aside on the master, so its own provider gets the devices', async () => {
@@ -258,7 +266,7 @@ describe("the master's autopilot on another server", () => {
     await Promise.all([m.autopilot.findDevices(), m.autopilot.findDevices()])
     expect(accessRequests).toBe(1)
     m.setMaster(true)
-    expect(m.autopilot.waitingForApproval()).toBeNull()
+    expect(m.waiting()).toBeNull()
   })
 
   it('asks the current master once, also when the master changes back while it asks', async () => {
@@ -288,7 +296,7 @@ describe("the master's autopilot on another server", () => {
     await m.autopilot.findDevices()
     answerSlow()
     await late
-    expect(m.autopilot.waitingForApproval()?.masterId).toBe('salon')
+    expect(m.waiting()?.masterId).toBe('salon')
   })
 
   it("keeps the current master's access when an earlier master's autopilots answer late", async () => {

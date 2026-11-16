@@ -6,10 +6,9 @@
  * and only the master sends to it. Its state is read from the master every
  * second and published here as the provider's update.
  *
- * Reading uses the readonly pairing token; commands need a readwrite device
- * token on the master, asked for once when the master is first found to have
- * an autopilot, and approved by the user under Security -> Access Requests
- * there.
+ * Reading uses the readonly pairing token; commands need the readwrite
+ * device token on the master (`MasterControlAccess`), asked for when the
+ * master is first found to have an autopilot.
  */
 
 import { isDeepStrictEqual } from 'node:util'
@@ -21,28 +20,15 @@ import type {
   Value
 } from '@signalk/server-api'
 
-import type { MasterAccess } from './master-proxy.js'
-import {
-  PeerHttpError,
-  callPeer,
-  pollAccess,
-  requestAccess,
-  type AccessRequestResult
-} from './peer-client.js'
-import type { ControlAccess, MultihelmStore } from './store.js'
+import type { MasterControlAccess, MasterOfBoat } from './master-control.js'
+import { PeerHttpError, callPeer } from './peer-client.js'
 
 export const AUTOPILOTS_PATH = '/signalk/v2/api/vessels/self/autopilots'
 export const STATE_POLL_MS = 1_000
 export const DEVICES_POLL_MS = 10_000
 
-export interface MasterOfBoat {
-  id: string
-  access: MasterAccess
-}
-
 export interface AutopilotHost {
-  store: MultihelmStore
-  serverId: string
+  control: MasterControlAccess
   /** The master to send to; null when this server is the master or there is none. */
   master: () => MasterOfBoat | null
   /** Whether this server is the master: its own autopilot provider serves, never this one. */
@@ -90,17 +76,12 @@ export class MasterAutopilot {
   private withdrawals = 0
   private devices: string[] = []
   private readonly published = new Map<string, Record<string, Value>>()
-  private control: ControlAccess | null
   private stateTimer: NodeJS.Timeout | null = null
   private devicesTimer: NodeJS.Timeout | null = null
   private polling = false
   private stopped = false
-  /** The access request or poll in flight for each master, shared by everyone waiting for it. */
-  private readonly asking = new Map<string, Promise<string | null>>()
 
-  constructor(private readonly host: AutopilotHost) {
-    this.control = host.store.loadControlAccess()
-  }
+  constructor(private readonly host: AutopilotHost) {}
 
   start(): void {
     this.devicesTimer = setInterval(() => {
@@ -137,16 +118,6 @@ export class MasterAutopilot {
   }
 
   /** The user has to approve this server's request on the master to send it commands. */
-  waitingForApproval(): { masterId: string; request: string } | null {
-    return !this.host.isMaster() && this.control?.state === 'waiting-approval'
-      ? { masterId: this.control.masterId, request: this.requestId() }
-      : null
-  }
-
-  requestId(): string {
-    return `signalk-multihelm-control-${this.host.serverId}`
-  }
-
   async findDevices(): Promise<void> {
     if (this.host.isMaster()) {
       this.withdraw()
@@ -171,7 +142,7 @@ export class MasterAutopilot {
     // Again each time: a device this server's own provider held until it stopped is free now.
     this.host.register(this.provider, devices)
     this.registered = true
-    await this.controlToken(master)
+    await this.host.control.token(master)
   }
 
   async pollState(): Promise<void> {
@@ -256,13 +227,13 @@ export class MasterAutopilot {
     body?: unknown
   ): Promise<void> {
     const master = this.masterOrFail()
-    const token = await this.controlToken(master)
+    const token = await this.host.control.token(master)
     if (token === null) {
       throw new AutopilotError(
         403,
-        this.control?.state === 'denied'
+        this.host.control.denied()
           ? "the master denied Multihelm's request to steer its autopilot; restart Multihelm to ask again"
-          : `approve Multihelm's request "${this.requestId()}" under Security -> Access Requests on the master to steer from this station`
+          : `approve Multihelm's request "${this.host.control.requestId()}" under Security -> Access Requests on the master to steer from this station`
       )
     }
     try {
@@ -275,9 +246,7 @@ export class MasterAutopilot {
       )
     } catch (error) {
       if (error instanceof PeerHttpError && (error.status === 401 || error.status === 403)) {
-        if (this.control?.masterId === master.id && this.control.token === token) {
-          this.saveControl(null)
-        }
+        this.host.control.revoked(master.id, token)
       }
       throw this.asAutopilotError(error)
     }
@@ -296,81 +265,6 @@ export class MasterAutopilot {
     }
     const status = error instanceof PeerHttpError ? error.status : 502
     return new AutopilotError(status, `the master's autopilot: ${errorText(error)}`)
-  }
-
-  private saveControl(access: ControlAccess | null): void {
-    this.control = access
-    this.host.store.saveControlAccess(access)
-  }
-
-  /** The readwrite token on the master, asked for when there is none; null until approved. */
-  private controlToken(master: MasterOfBoat): Promise<string | null> {
-    if (!this.isCurrent(master)) {
-      return Promise.resolve(null)
-    }
-    let token = this.asking.get(master.id)
-    if (!token) {
-      token = this.askControl(master).finally(() => {
-        this.asking.delete(master.id)
-      })
-      this.asking.set(master.id, token)
-    }
-    return token
-  }
-
-  private async askControl(master: MasterOfBoat): Promise<string | null> {
-    if (this.control && this.control.masterId !== master.id) {
-      this.saveControl(null)
-    }
-    if (this.control?.state === 'granted') {
-      return this.control.token
-    }
-    if (this.control?.state === 'denied') {
-      return null
-    }
-    let result: AccessRequestResult
-    try {
-      result =
-        this.control?.state === 'waiting-approval' && this.control.requestHref
-          ? await pollAccess(master.access, this.control.requestHref)
-          : await requestAccess(
-              master.access,
-              this.requestId(),
-              "Multihelm: operate the master's autopilot from another station",
-              'readwrite'
-            )
-    } catch (error) {
-      this.host.debug(`Multihelm: access request on the master: ${errorText(error)}`)
-      return null
-    }
-    // The master moved on during the request: its answer must not replace the new master's access.
-    if (!this.isCurrent(master)) {
-      return null
-    }
-    switch (result.kind) {
-      case 'no-security':
-        this.saveControl({ masterId: master.id, token: '', state: 'granted' })
-        return ''
-      case 'approved':
-        this.saveControl({ masterId: master.id, token: result.token, state: 'granted' })
-        return result.token
-      case 'pending':
-        this.saveControl({
-          masterId: master.id,
-          token: '',
-          requestHref: result.href,
-          state: 'waiting-approval'
-        })
-        return null
-      case 'denied':
-        // Asked again after a restart, as the user may have denied it by mistake.
-        this.host.store.saveControlAccess(null)
-        this.control = { masterId: master.id, token: '', state: 'denied' }
-        return null
-      case 'error':
-        this.host.debug(`Multihelm: access request on the master: ${result.message}`)
-        return null
-    }
   }
 
   private readonly provider: AutopilotProvider = {
