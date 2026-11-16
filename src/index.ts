@@ -21,6 +21,7 @@ import { Multihelm, ROUND_INTERVAL_MS } from './multihelm.js'
 import { ROUTE_PREFIX } from './peer-client.js'
 import { registerRoutes } from './routes.js'
 import type { OwnAccessState } from './status.js'
+import { hasResourcesApi, resourcesDataset } from './resources-dataset.js'
 import { MultihelmStore } from './store.js'
 import { sourcePrioritiesFromSettings } from './source-priorities.js'
 import { vesselSettingsFromDeltas, type VesselSettings } from './vessel-settings.js'
@@ -40,6 +41,7 @@ function multihelmVersion(): string | undefined {
 
 type Config = {
   master?: unknown
+  syncResources?: unknown
   followVessel?: unknown
   followMetadata?: unknown
   followSourcePriorities?: unknown
@@ -149,6 +151,20 @@ export default function (app: ServerAPI): Plugin {
       discovery = new ServerDiscovery(() => host.config?.getExternalPort?.())
       discovery.start()
       mh.start()
+      const resources =
+        settings.syncResources !== false && hasResourcesApi(app)
+          ? mh.registerDataset(
+              resourcesDataset({
+                list: (type) => app.resourcesApi.listResources(type, {}),
+                set: (type, id, resource) => app.resourcesApi.setResource(type, id, resource),
+                delete: (type, id) => app.resourcesApi.deleteResource(type, id),
+                mirrorDir: path.join(app.getDataDirPath(), 'resources'),
+                debug: (msg) => {
+                  app.debug(msg)
+                }
+              })
+            )
+          : null
       publish({
         apiVersion: API_VERSION,
         registerDataset: (definition) => mh.registerDataset(definition),
@@ -241,6 +257,7 @@ export default function (app: ServerAPI): Plugin {
         clearInterval(historyTimer)
         stopRoleHistory()
         history?.stop()
+        resources?.unregister()
       }
       stopRoleStatus = mh.onStatusChanged(showRole)
       showRole()

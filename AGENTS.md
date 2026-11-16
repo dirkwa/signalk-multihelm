@@ -37,6 +37,10 @@ sets by hand on one server (see `README.md`).
 - `source-priorities.ts` — the source priorities the user set, in the shape
   of `/skServer/priorities`, read from `app.config.settings`; peers get them
   in `vessel-settings`.
+- `resources-dataset.ts` — the `signalk-multihelm/resources` dataset:
+  routes, waypoints, regions and notes through `app.resourcesApi`, one
+  mirror file each under the data dir; waits for a write to be stored, and
+  keeps a type's last listing when it reads as empty.
 - `follow-master.ts` — `MasterFollower`: on a member, takes those over from
   the master and writes what differs through this server's own REST API
   (`/skServer/vessel`, meta PUT/DELETE, `/skServer/priorities`) with an
