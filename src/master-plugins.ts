@@ -42,6 +42,8 @@ function errorText(error: unknown): string {
 export class MasterPluginList {
   private readonly file: string
   private current: string[]
+  /** Writes one after the other, so two cannot share the temporary file or publish out of order. */
+  private writes: Promise<unknown> = Promise.resolve()
 
   constructor(
     dir: string,
@@ -55,8 +57,8 @@ export class MasterPluginList {
     return this.current
   }
 
-  async set(ids: string[]): Promise<void> {
-    await this.write(ids)
+  set(ids: string[]): Promise<void> {
+    return this.queued(() => this.write(ids))
   }
 
   readonly dataset: DatasetDefinition = {
@@ -88,14 +90,22 @@ export class MasterPluginList {
       if (!ids) {
         throw new Error('not a list of plugin ids')
       }
-      await this.write(ids)
+      await this.queued(() => this.write(ids))
     },
 
     remove: async (): Promise<boolean> => {
-      await fs.promises.rm(this.file, { force: true })
-      this.changed([])
+      await this.queued(async () => {
+        await fs.promises.rm(this.file, { force: true })
+        this.changed([])
+      })
       return true
     }
+  }
+
+  private queued(work: () => Promise<void>): Promise<void> {
+    const result = this.writes.then(work)
+    this.writes = result.catch(() => undefined)
+    return result
   }
 
   private read(): string[] {
@@ -199,6 +209,10 @@ export class MasterOnlyPlugins {
           continue
         }
         const options = await callServer('GET', pluginUrl(base, id, '/config'), token)
+        // The role may have moved during the requests; the next pass follows the new one.
+        if (this.host.wanted() !== wanted) {
+          return
+        }
         const body =
           typeof options === 'object' && options !== null && !Array.isArray(options)
             ? { ...options, enabled: wanted }

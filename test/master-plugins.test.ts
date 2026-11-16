@@ -54,6 +54,14 @@ describe('the list of plugins that run on the master only', () => {
     expect(new MasterPluginList(dir, () => undefined).ids()).toEqual(['autopilot', 'rules'])
   })
 
+  it('writes overlapping changes one after the other, the last one winning', async () => {
+    const list = new MasterPluginList(path.join(root, 'overlap'), () => undefined)
+    await Promise.all([list.set(['a']), list.set(['b']), list.set(['c'])])
+    expect(list.ids()).toEqual(['c'])
+    const [entry] = await list.dataset.list()
+    expect(JSON.parse(fs.readFileSync(entry?.files[0]?.path ?? '', 'utf8'))).toEqual(['c'])
+  })
+
   it("takes a peer's list, and refuses one that is not a list of plugin ids", async () => {
     const list = new MasterPluginList(path.join(root, 'peer'), () => undefined)
     const incoming = path.join(root, 'incoming.json')
@@ -131,11 +139,15 @@ describe('switching the plugins that run on the master only', () => {
     security = false
   })
 
-  function switcher(name: string, wanted: boolean | null, ids: string[]): MasterOnlyPlugins {
+  function switcher(
+    name: string,
+    wanted: boolean | null | (() => boolean | null),
+    ids: string[]
+  ): MasterOnlyPlugins {
     const store = new MultihelmStore(path.join(root, name))
     const host: SwitchHost = {
       ids: () => ids,
-      wanted: () => wanted,
+      wanted: typeof wanted === 'function' ? wanted : () => wanted,
       access: new OwnServerAccess({
         store,
         serverId: 'own',
@@ -187,5 +199,36 @@ describe('switching the plugins that run on the master only', () => {
     plugins.set('autopilot', { enabled: true })
     await switcher('secure', false, ['autopilot']).applyOnce()
     expect(posts).toEqual([])
+  })
+
+  it('writes nothing when the role moved while it asked the server', async () => {
+    plugins.set('autopilot', { enabled: true })
+    let asked = 0
+    // Known when the pass starts, gone by the time it would write.
+    await switcher('moved', () => (asked++ === 0 ? false : null), ['autopilot']).applyOnce()
+    expect(posts).toEqual([])
+  })
+})
+
+describe("this server's own access request", () => {
+  it('is sent once for callers that wait at the same time', async () => {
+    let requests = 0
+    const app = express()
+    app.post('/signalk/v1/access/requests', (_req, res) => {
+      requests++
+      setTimeout(() => res.status(202).json({ state: 'PENDING', href: '/r/1' }), 20)
+    })
+    const server = http.createServer(app)
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
+    const { port } = server.address() as AddressInfo
+    const access = new OwnServerAccess({
+      store: new MultihelmStore(path.join(root, 'shared-request')),
+      serverId: 'own',
+      ownUrl: () => `http://127.0.0.1:${String(port)}`,
+      debug: () => undefined
+    })
+    expect(await Promise.all([access.token(), access.token()])).toEqual([null, null])
+    expect(requests).toBe(1)
+    server.close()
   })
 })

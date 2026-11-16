@@ -17,6 +17,8 @@ export interface OwnAccessHost {
 
 export class OwnServerAccess {
   private access: OwnAccess
+  /** One request or poll at a time, shared by everyone waiting for the token. */
+  private asking: Promise<string | null> | null = null
 
   constructor(private readonly host: OwnAccessHost) {
     this.access = host.store.loadOwnAccess()
@@ -43,13 +45,20 @@ export class OwnServerAccess {
   }
 
   /** The token, empty without security; null while there is none to use. */
-  async token(): Promise<string | null> {
+  token(): Promise<string | null> {
     if (this.access.state === 'granted') {
-      return this.access.token
+      return Promise.resolve(this.access.token)
     }
     if (this.access.state === 'denied') {
-      return null
+      return Promise.resolve(null)
     }
+    this.asking ??= this.ask().finally(() => {
+      this.asking = null
+    })
+    return this.asking
+  }
+
+  private async ask(): Promise<string | null> {
     const base = this.host.ownUrl()
     let result: AccessRequestResult
     try {

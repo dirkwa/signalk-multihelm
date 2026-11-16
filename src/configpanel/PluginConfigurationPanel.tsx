@@ -565,11 +565,23 @@ function MasterPluginsCard({ status, onSaved }: { status: Status; onSaved: () =>
             </label>
           </div>
         ))}
-        {plugins !== null && missing.length > 0 && (
-          <p className="small text-body-secondary mt-2">
-            Also on the list, not installed here: {missing.join(', ')}
-          </p>
-        )}
+        {plugins !== null &&
+          missing.map((id) => (
+            <div className="form-check" key={id}>
+              <input
+                className="form-check-input"
+                type="checkbox"
+                id={`multihelm-master-plugin-${id}`}
+                checked={selected.includes(id)}
+                onChange={(e) => {
+                  toggle(id, e.target.checked)
+                }}
+              />
+              <label className="form-check-label" htmlFor={`multihelm-master-plugin-${id}`}>
+                {id} <span className="text-body-secondary">(not installed here)</span>
+              </label>
+            </div>
+          ))}
         <button
           type="button"
           className="btn btn-primary mt-3"

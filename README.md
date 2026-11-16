@@ -100,8 +100,8 @@ while another server is, through its own plugin settings, as the admin UI
 does: it shows them as disabled on the other servers, and they stay so
 across a restart. Their own settings are left as they are, so set them up
 on every server that may become the master. While no master is found,
-nothing is switched, and a plugin turned on by hand on another server is
-turned off again within a minute. Switching uses the same admin access as
+nothing is switched. While another server is the master, a plugin on the
+list turned on by hand here is turned off again within a minute. Switching uses the same admin access as
 taking the vessel settings over (see below), on the master too.
 
 ## Vessel data, metadata and source priorities from the master
