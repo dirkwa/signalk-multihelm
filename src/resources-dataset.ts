@@ -105,6 +105,8 @@ export interface ResourcesDataset {
   dataset: DatasetDefinition
   /** The server announced a deletion with a null value on `resources.<type>.<id>`. */
   deleted: (type: ResourceType, id: string) => Promise<void>
+  /** The server announced a stored value on `resources.<type>.<id>`. */
+  written: (type: ResourceType, id: string) => void
 }
 
 export function resourcesDataset(host: ResourcesHost): ResourcesDataset {
@@ -133,14 +135,14 @@ export function resourcesDataset(host: ResourcesHost): ResourcesDataset {
 
   /** Rewrites a mirror file only when its resource changed, so its time stays what was hashed. */
   async function mirror(type: ResourceType, id: string, text: string, had?: string): Promise<void> {
-    if (had === text) {
-      return
+    if (had !== text) {
+      const file = mirrorPath(type, id)
+      await fs.promises.mkdir(path.dirname(file), { recursive: true })
+      const tmp = `${file}.part`
+      await fs.promises.writeFile(tmp, text)
+      await fs.promises.rename(tmp, file)
     }
-    const file = mirrorPath(type, id)
-    await fs.promises.mkdir(path.dirname(file), { recursive: true })
-    const tmp = `${file}.part`
-    await fs.promises.writeFile(tmp, text)
-    await fs.promises.rename(tmp, file)
+    pendingRemovals.delete(`${type}/${id}`)
   }
 
   /**
@@ -164,15 +166,10 @@ export function resourcesDataset(host: ResourcesHost): ResourcesDataset {
       if (!RESOURCE_ID.test(id) || !isRecord(resource)) {
         continue
       }
-      const key = `${type}/${id}`
-      const text = resourceText(resource)
-      if (deletedHere.has(key)) {
-        const was = deletedHere.get(key)
-        if (was === null || was === text) {
-          continue
-        }
-        deletedHere.delete(key)
+      if (deletedHere.has(`${type}/${id}`)) {
+        continue
       }
+      const text = resourceText(resource)
       await mirror(type, id, text, known.get(id))
       known.set(id, text)
     }
@@ -180,11 +177,10 @@ export function resourcesDataset(host: ResourcesHost): ResourcesDataset {
   }
 
   /**
-   * Deleted on this server since the start, with what they held (null when
-   * unknown): a listing read before the deletion must not bring them back,
-   * but a resource written again under the same id since then is new.
+   * Deleted on this server and not written again since: a listing read
+   * before the deletion must not bring them back.
    */
-  const deletedHere = new Map<string, string | null>()
+  const deletedHere = new Set<string>()
   const awaitingDeletion = new Map<string, () => void>()
   /** Deleted on the server, but their mirror files could not be removed yet. */
   const pendingRemovals = new Set<string>()
@@ -238,10 +234,8 @@ export function resourcesDataset(host: ResourcesHost): ResourcesDataset {
 
   async function deleted(type: ResourceType, id: string): Promise<void> {
     const key = `${type}/${id}`
-    await exclusive(async () => {
-      deletedHere.set(key, (await mirrored(type)).get(id) ?? null)
-      await removeMirror(key)
-    })
+    deletedHere.add(key)
+    await exclusive(() => removeMirror(key))
     awaitingDeletion.get(key)?.()
     awaitingDeletion.delete(key)
   }
@@ -253,10 +247,17 @@ export function resourcesDataset(host: ResourcesHost): ResourcesDataset {
     list: async (): Promise<DatasetEntry[]> => {
       const entries: DatasetEntry[] = []
       for (const key of [...pendingRemovals]) {
-        await exclusive(() => removeMirror(key))
+        await exclusive(async () => {
+          if (pendingRemovals.has(key)) {
+            await removeMirror(key)
+          }
+        })
       }
       for (const type of RESOURCE_TYPES) {
         for (const id of (await exclusive(() => current(type))).keys()) {
+          if (pendingRemovals.has(`${type}/${id}`)) {
+            continue
+          }
           const file = mirrorPath(type, id)
           const stat = await fs.promises.stat(file)
           entries.push({
@@ -310,5 +311,9 @@ export function resourcesDataset(host: ResourcesHost): ResourcesDataset {
     }
   }
 
-  return { dataset, deleted }
+  function written(type: ResourceType, id: string): void {
+    deletedHere.delete(`${type}/${id}`)
+  }
+
+  return { dataset, deleted, written }
 }

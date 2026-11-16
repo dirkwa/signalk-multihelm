@@ -89,6 +89,7 @@ describe('the resources dataset', () => {
       set: (type, id, resource) => {
         later(fake, () => {
           fake.store[type][id] = resource
+          sync.written(type, id)
         })
         return Promise.resolve()
       },
@@ -234,17 +235,69 @@ describe('the resources dataset', () => {
     )
   })
 
-  it('lists a resource written again under a deleted id, but not a stale copy', async () => {
+  it('lists a resource written again under a deleted id, even unchanged, but not a stale copy', async () => {
     fake.store.routes[ROUTE] = { name: 'Harbour' }
     await dataset.list()
 
     await sync.deleted('routes', ROUTE)
     expect(await dataset.list()).toEqual([])
 
-    fake.store.routes[ROUTE] = { name: 'Marina' }
+    sync.written('routes', ROUTE)
+    const entries = await dataset.list()
+    expect(entries.map((e) => e.key)).toEqual([`routes/${ROUTE}`])
+    expect(read(entries[0])).toEqual({ name: 'Harbour' })
+  })
+
+  it('lists a resource written again after a deletion it had no copy of', async () => {
+    await sync.deleted('routes', ROUTE)
+    fake.store.routes[ROUTE] = { name: 'Harbour' }
+    expect(await dataset.list()).toEqual([])
+
+    sync.written('routes', ROUTE)
+    expect((await dataset.list()).map((e) => e.key)).toEqual([`routes/${ROUTE}`])
+  })
+
+  it('does not offer a copy whose removal keeps failing', async () => {
+    fake.store.routes[ROUTE] = { name: 'Harbour' }
+    const [entry] = await dataset.list()
+    const file = entry?.files[0]?.path ?? ''
+    vi.spyOn(fs.promises, 'rm').mockRejectedValue(new Error('busy'))
+
+    Reflect.deleteProperty(fake.store.routes, ROUTE)
+    await sync.deleted('routes', ROUTE)
+    expect(await dataset.list()).toEqual([])
+    expect(await dataset.list()).toEqual([])
+    expect(errors).toHaveLength(3)
+    expect(fs.existsSync(file)).toBe(true)
+  })
+
+  it('keeps a copy written again while its old one waited for removal', async () => {
+    fake.store.routes[ROUTE] = { name: 'Harbour' }
+    const [entry] = await dataset.list()
+    vi.spyOn(fs.promises, 'rm').mockRejectedValueOnce(new Error('busy'))
+    Reflect.deleteProperty(fake.store.routes, ROUTE)
+    await sync.deleted('routes', ROUTE)
+
+    fs.writeFileSync(path.join(dir, 'incoming.json'), JSON.stringify({ name: 'Marina' }))
+    await dataset.apply({
+      key: `routes/${ROUTE}`,
+      meta: null,
+      files: [
+        {
+          name: 'resource.json',
+          path: path.join(dir, 'incoming.json'),
+          size: 0,
+          sha256: '',
+          unchanged: false
+        }
+      ]
+    })
+    fake.fail = true
+
     const entries = await dataset.list()
     expect(entries.map((e) => e.key)).toEqual([`routes/${ROUTE}`])
     expect(read(entries[0])).toEqual({ name: 'Marina' })
+    expect(entry?.files[0]?.path).toBe(entries[0]?.files[0]?.path)
   })
 
   it('removes the copy of a deleted resource on the next listing when it could not at once', async () => {

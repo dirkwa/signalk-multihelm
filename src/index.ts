@@ -147,8 +147,10 @@ export default function (app: ServerAPI): Plugin {
       (delta) => {
         for (const update of delta.updates) {
           for (const { path: valuePath, value } of 'values' in update ? update.values : []) {
-            const resource = value === null ? resourceOfPath(valuePath) : null
-            if (resource) {
+            const resource = resourceOfPath(valuePath)
+            if (resource && value !== null) {
+              sync.written(resource.type, resource.id)
+            } else if (resource) {
               sync.deleted(resource.type, resource.id).then(
                 () => {
                   handle.changed()
