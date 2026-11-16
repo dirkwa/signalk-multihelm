@@ -95,8 +95,8 @@ export class MasterAutopilot {
   private devicesTimer: NodeJS.Timeout | null = null
   private polling = false
   private stopped = false
-  /** One access request or poll at a time, shared by everyone waiting for it. */
-  private asking: { masterId: string; token: Promise<string | null> } | null = null
+  /** The access request or poll in flight for each master, shared by everyone waiting for it. */
+  private readonly asking = new Map<string, Promise<string | null>>()
 
   constructor(private readonly host: AutopilotHost) {
     this.control = host.store.loadControlAccess()
@@ -299,15 +299,14 @@ export class MasterAutopilot {
 
   /** The readwrite token on the master, asked for when there is none; null until approved. */
   private controlToken(master: MasterOfBoat): Promise<string | null> {
-    if (this.asking?.masterId !== master.id) {
-      const token = this.askControl(master).finally(() => {
-        if (this.asking?.token === token) {
-          this.asking = null
-        }
+    let token = this.asking.get(master.id)
+    if (!token) {
+      token = this.askControl(master).finally(() => {
+        this.asking.delete(master.id)
       })
-      this.asking = { masterId: master.id, token }
+      this.asking.set(master.id, token)
     }
-    return this.asking.token
+    return token
   }
 
   private async askControl(master: MasterOfBoat): Promise<string | null> {

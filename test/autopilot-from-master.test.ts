@@ -113,6 +113,7 @@ describe("the master's autopilot on another server", () => {
     updates: { device: string; info: Record<string, Value> }[]
     withdrawn: () => number
     setMaster: (value: boolean) => void
+    setMasterId: (id: string) => void
   }
 
   function make(name: string): Made {
@@ -121,11 +122,12 @@ describe("the master's autopilot on another server", () => {
     const updates: { device: string; info: Record<string, Value> }[] = []
     let withdrawn = 0
     let isMaster = false
+    let masterId = 'salon'
     const host: AutopilotHost = {
       store: new MultihelmStore(path.join(root, name)),
       serverId: 'port',
       master: () =>
-        isMaster ? null : { id: 'salon', access: { url: master.url, token: 'pairing-token' } },
+        isMaster ? null : { id: masterId, access: { url: master.url, token: 'pairing-token' } },
       isMaster: () => isMaster,
       register: (p, devices) => {
         provider = p
@@ -151,6 +153,9 @@ describe("the master's autopilot on another server", () => {
       registered,
       updates,
       withdrawn: () => withdrawn,
+      setMasterId: (id) => {
+        masterId = id
+      },
       setMaster: (value) => {
         isMaster = value
       }
@@ -234,6 +239,19 @@ describe("the master's autopilot on another server", () => {
     expect(accessRequests).toBe(1)
     m.setMaster(true)
     expect(m.autopilot.waitingForApproval()).toBeNull()
+  })
+
+  it('asks each master once, also when the master changes back while it asks', async () => {
+    security = true
+    approval = 'PENDING'
+    const m = make('per-master')
+    const asked = [m.autopilot.findDevices()]
+    m.setMasterId('helm')
+    asked.push(m.autopilot.findDevices())
+    m.setMasterId('salon')
+    asked.push(m.autopilot.findDevices())
+    await Promise.all(asked)
+    expect(accessRequests).toBe(2)
   })
 
   it('says so when the master denied the request', async () => {
