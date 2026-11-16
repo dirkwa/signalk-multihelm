@@ -33,6 +33,7 @@ export interface ResourcesHost {
   /** Where the mirror files live. */
   mirrorDir: string
   debug: (msg: string) => void
+  error: (msg: string) => void
 }
 
 /** Plugins reach the Resources API in process; a server without it has nothing to keep in step. */
@@ -160,18 +161,54 @@ export function resourcesDataset(host: ResourcesHost): ResourcesDataset {
       return known
     }
     for (const [id, resource] of Object.entries(listed)) {
-      if (RESOURCE_ID.test(id) && isRecord(resource) && !deletedHere.has(`${type}/${id}`)) {
-        const text = resourceText(resource)
-        await mirror(type, id, text, known.get(id))
-        known.set(id, text)
+      if (!RESOURCE_ID.test(id) || !isRecord(resource)) {
+        continue
       }
+      const key = `${type}/${id}`
+      const text = resourceText(resource)
+      if (deletedHere.has(key)) {
+        const was = deletedHere.get(key)
+        if (was === null || was === text) {
+          continue
+        }
+        deletedHere.delete(key)
+      }
+      await mirror(type, id, text, known.get(id))
+      known.set(id, text)
     }
     return known
   }
 
-  /** Deleted on this server since the start; a listing read before the deletion must not bring them back. */
-  const deletedHere = new Set<string>()
+  /**
+   * Deleted on this server since the start, with what they held (null when
+   * unknown): a listing read before the deletion must not bring them back,
+   * but a resource written again under the same id since then is new.
+   */
+  const deletedHere = new Map<string, string | null>()
   const awaitingDeletion = new Map<string, () => void>()
+  /** Deleted on the server, but their mirror files could not be removed yet. */
+  const pendingRemovals = new Set<string>()
+
+  /** Mirror files are written and removed one after the other, so a deletion cannot race a rewrite. */
+  let mirrorWork: Promise<unknown> = Promise.resolve()
+  function exclusive<T>(work: () => Promise<T>): Promise<T> {
+    const result = mirrorWork.then(work)
+    mirrorWork = result.catch(() => undefined)
+    return result
+  }
+
+  async function removeMirror(key: string): Promise<void> {
+    const { type, id } = splitKey(key)
+    try {
+      await fs.promises.rm(mirrorPath(type, id), { force: true })
+      pendingRemovals.delete(key)
+    } catch (error) {
+      pendingRemovals.add(key)
+      host.error(
+        `Multihelm: cannot remove the copy of ${key}, trying again: ${error instanceof Error ? error.message : String(error)}`
+      )
+    }
+  }
 
   /** The Resources API answers before the provider has written: wait until it has. */
   async function whenStored(type: ResourceType, id: string, text: string): Promise<void> {
@@ -201,8 +238,10 @@ export function resourcesDataset(host: ResourcesHost): ResourcesDataset {
 
   async function deleted(type: ResourceType, id: string): Promise<void> {
     const key = `${type}/${id}`
-    deletedHere.add(key)
-    await fs.promises.rm(mirrorPath(type, id), { force: true })
+    await exclusive(async () => {
+      deletedHere.set(key, (await mirrored(type)).get(id) ?? null)
+      await removeMirror(key)
+    })
     awaitingDeletion.get(key)?.()
     awaitingDeletion.delete(key)
   }
@@ -213,8 +252,11 @@ export function resourcesDataset(host: ResourcesHost): ResourcesDataset {
 
     list: async (): Promise<DatasetEntry[]> => {
       const entries: DatasetEntry[] = []
+      for (const key of [...pendingRemovals]) {
+        await exclusive(() => removeMirror(key))
+      }
       for (const type of RESOURCE_TYPES) {
-        for (const id of (await current(type)).keys()) {
+        for (const id of (await exclusive(() => current(type))).keys()) {
           const file = mirrorPath(type, id)
           const stat = await fs.promises.stat(file)
           entries.push({
@@ -241,7 +283,7 @@ export function resourcesDataset(host: ResourcesHost): ResourcesDataset {
       deletedHere.delete(entry.key)
       await host.set(type, id, resource)
       await whenStored(type, id, text)
-      await mirror(type, id, text)
+      await exclusive(() => mirror(type, id, text))
     },
 
     /**
@@ -260,7 +302,7 @@ export function resourcesDataset(host: ResourcesHost): ResourcesDataset {
         host.debug(
           `Multihelm: the server refused to delete ${key}: ${error instanceof Error ? error.message : String(error)}`
         )
-        await fs.promises.rm(mirrorPath(type, id), { force: true })
+        await exclusive(() => removeMirror(key))
         return true
       }
       await confirmed

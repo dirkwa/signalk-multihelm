@@ -2,7 +2,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import type { DatasetDefinition, DatasetEntry } from '../src/api.js'
 import {
@@ -14,6 +14,7 @@ import {
 } from '../src/resources-dataset.js'
 
 const ROUTE = '0f9c6a0e-5b7a-4c4e-9d1e-2a3b4c5d6e7f'
+const ROUTE_2 = '2b3c4d5e-6f7a-4b2c-9d3e-4f5a6b7c8d9e'
 const WAYPOINT = '1a2b3c4d-5e6f-4a1b-8c2d-3e4f5a6b7c8d'
 
 interface Fake {
@@ -67,10 +68,12 @@ describe('the resources dataset', () => {
   let fake: Fake
   let dataset: DatasetDefinition
   let sync: ResourcesDataset
+  let errors: string[]
 
   beforeEach(() => {
     dir = fs.mkdtempSync(path.join(os.tmpdir(), 'multihelm-resources-'))
     fake = fakeServer()
+    errors = []
     sync = resourcesDataset({
       list: (type) =>
         fake.fail
@@ -100,12 +103,16 @@ describe('the resources dataset', () => {
         return Promise.resolve()
       },
       mirrorDir: dir,
-      debug: () => undefined
+      debug: () => undefined,
+      error: (msg) => {
+        errors.push(msg)
+      }
     })
     dataset = sync.dataset
   })
 
   afterEach(() => {
+    vi.restoreAllMocks()
     fs.rmSync(dir, { recursive: true, force: true })
   })
 
@@ -214,5 +221,44 @@ describe('the resources dataset', () => {
     fake.fail = true
 
     expect((await dataset.list()).map((e) => e.key)).toEqual([`routes/${ROUTE}`])
+  })
+
+  it('keeps a resource of a type whose listing lacks it, beside one it still holds', async () => {
+    fake.store.routes[ROUTE] = { name: 'Harbour' }
+    fake.store.routes[ROUTE_2] = { name: 'Marina' }
+    await dataset.list()
+
+    Reflect.deleteProperty(fake.store.routes, ROUTE_2)
+    expect((await dataset.list()).map((e) => e.key).sort()).toEqual(
+      [`routes/${ROUTE}`, `routes/${ROUTE_2}`].sort()
+    )
+  })
+
+  it('lists a resource written again under a deleted id, but not a stale copy', async () => {
+    fake.store.routes[ROUTE] = { name: 'Harbour' }
+    await dataset.list()
+
+    await sync.deleted('routes', ROUTE)
+    expect(await dataset.list()).toEqual([])
+
+    fake.store.routes[ROUTE] = { name: 'Marina' }
+    const entries = await dataset.list()
+    expect(entries.map((e) => e.key)).toEqual([`routes/${ROUTE}`])
+    expect(read(entries[0])).toEqual({ name: 'Marina' })
+  })
+
+  it('removes the copy of a deleted resource on the next listing when it could not at once', async () => {
+    fake.store.routes[ROUTE] = { name: 'Harbour' }
+    const [entry] = await dataset.list()
+    const file = entry?.files[0]?.path ?? ''
+    vi.spyOn(fs.promises, 'rm').mockRejectedValueOnce(new Error('busy'))
+
+    Reflect.deleteProperty(fake.store.routes, ROUTE)
+    await sync.deleted('routes', ROUTE)
+    expect(errors).toHaveLength(1)
+    expect(fs.existsSync(file)).toBe(true)
+
+    expect(await dataset.list()).toEqual([])
+    expect(fs.existsSync(file)).toBe(false)
   })
 })

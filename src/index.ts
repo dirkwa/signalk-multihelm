@@ -127,6 +127,9 @@ export default function (app: ServerAPI): Plugin {
       mirrorDir: path.join(app.getDataDirPath(), 'resources'),
       debug: (msg) => {
         app.debug(msg)
+      },
+      error: (msg) => {
+        app.error(msg)
       }
     })
     const handle = mh.registerDataset(sync.dataset)
@@ -146,9 +149,16 @@ export default function (app: ServerAPI): Plugin {
           for (const { path: valuePath, value } of 'values' in update ? update.values : []) {
             const resource = value === null ? resourceOfPath(valuePath) : null
             if (resource) {
-              void sync.deleted(resource.type, resource.id).then(() => {
-                handle.changed()
-              })
+              sync.deleted(resource.type, resource.id).then(
+                () => {
+                  handle.changed()
+                },
+                (error: unknown) => {
+                  app.error(
+                    `Multihelm: cannot follow the deletion of ${resource.type}/${resource.id}: ${error instanceof Error ? error.message : String(error)}`
+                  )
+                }
+              )
             }
           }
         }
