@@ -124,6 +124,9 @@ export class MasterCourse {
   private running = false
   /** The course both servers last agreed on, and the master it was agreed with. */
   private agreed: { masterId: string; course: CourseSetting } | null = null
+  /** A course set here whose sending to the master has not completed: sent again while it stays. */
+  private sending: { masterId: string; course: CourseSetting } | null = null
+  private stopped = false
 
   constructor(private readonly host: CourseHost) {}
 
@@ -134,6 +137,7 @@ export class MasterCourse {
   }
 
   stop(): void {
+    this.stopped = true
     if (this.timer) {
       clearInterval(this.timer)
     }
@@ -159,6 +163,7 @@ export class MasterCourse {
     const master = this.host.master()
     if (!master) {
       this.agreed = null
+      this.sending = null
       return
     }
     const ownToken = await this.host.own.token()
@@ -166,46 +171,71 @@ export class MasterCourse {
       return
     }
     const here = this.ownCall(ownToken)
-    const theirs = courseSetting(
-      await callPeer('GET', master.access, COURSE_PATH, master.access.token)
-    )
-    const ours = courseSetting(await here('GET', ''))
-    if (!theirs || !ours) {
+    const refusedHere = (): void => {
+      this.host.own.revoked()
+    }
+    const theirs = await this.readMaster(master)
+    const ours = courseSetting(await this.guarded(() => here('GET', ''), refusedHere))
+    if (!theirs || !ours || !this.stillFor(master)) {
       return
     }
     const agreed = this.agreed?.masterId === master.id ? this.agreed.course : null
     if (isDeepStrictEqual(ours, theirs)) {
       this.agreed = { masterId: master.id, course: theirs }
+      this.sending = null
       return
     }
-    // Changed here alone: the master takes it over. In any other case, the master's course holds.
-    if (agreed && isDeepStrictEqual(theirs, agreed)) {
-      const controlToken = await this.host.control.token(master)
-      if (controlToken === null) {
-        return
-      }
-      await this.write(this.masterCall(master, controlToken), theirs, ours, () => {
-        this.host.control.revoked(master.id, controlToken)
-      })
-      this.agreed = { masterId: master.id, course: ours }
-      this.host.debug('Multihelm: sent the course set here to the master')
+    const resend =
+      this.sending?.masterId === master.id && isDeepStrictEqual(this.sending.course, ours)
+    // Changed here alone, or still on its way: the master takes it over. Otherwise the master's course holds.
+    if (resend || (agreed && isDeepStrictEqual(theirs, agreed))) {
+      await this.send(master, ours, resend ? null : agreed)
       return
     }
-    await this.write(here, ours, theirs, () => {
-      this.host.own.revoked()
-    })
+    this.sending = null
+    await this.guarded(() => writeCourse(here, ours, theirs), refusedHere)
     this.agreed = { masterId: master.id, course: theirs }
     this.host.debug("Multihelm: took the master's course over")
   }
 
-  private async write(
-    call: Call,
-    from: CourseSetting,
-    to: CourseSetting,
-    refused: () => void
+  /** Sends `ours` to the master, if the master's course is still `expected` (any, when null). */
+  private async send(
+    master: MasterOfBoat,
+    ours: CourseSetting,
+    expected: CourseSetting | null
   ): Promise<void> {
+    const controlToken = await this.host.control.token(master)
+    if (controlToken === null) {
+      return
+    }
+    const theirs = await this.readMaster(master)
+    if (!theirs || !this.stillFor(master) || (expected && !isDeepStrictEqual(theirs, expected))) {
+      return
+    }
+    this.sending = { masterId: master.id, course: ours }
+    await this.guarded(
+      () => writeCourse(this.masterCall(master, controlToken), theirs, ours),
+      () => {
+        this.host.control.revoked(master.id, controlToken)
+      }
+    )
+    this.sending = null
+    this.agreed = { masterId: master.id, course: ours }
+    this.host.debug('Multihelm: sent the course set here to the master')
+  }
+
+  private async readMaster(master: MasterOfBoat): Promise<CourseSetting | null> {
+    return courseSetting(await callPeer('GET', master.access, COURSE_PATH, master.access.token))
+  }
+
+  /** Whether a pass begun for `master` may still write: not stopped, and the master unchanged. */
+  private stillFor(master: MasterOfBoat): boolean {
+    return !this.stopped && this.host.master()?.id === master.id
+  }
+
+  private async guarded<T>(work: () => Promise<T>, refused: () => void): Promise<T> {
     try {
-      await writeCourse(call, from, to)
+      return await work()
     } catch (error) {
       if (error instanceof PeerHttpError && (error.status === 401 || error.status === 403)) {
         refused()

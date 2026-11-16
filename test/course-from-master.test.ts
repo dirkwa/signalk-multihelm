@@ -32,6 +32,9 @@ interface Server {
   url: string
   course: Record<string, unknown>
   writes: string[]
+  /** Answered with this status once, then as usual. */
+  failNext: { request: string; status: number } | null
+  accessRequests: number
   close: () => void
 }
 
@@ -41,12 +44,24 @@ async function courseServer(): Promise<Server> {
     url: '',
     course: { ...NONE },
     writes: [],
+    failNext: null,
+    accessRequests: 0,
     close: () => undefined
   }
   const app = express()
   app.use(express.json())
   app.post('/signalk/v1/access/requests', (_req, res) => {
+    server.accessRequests++
     res.sendStatus(404)
+  })
+  app.use(COURSE_PATH, (req, res, next) => {
+    const fail = server.failNext
+    if (fail && fail.request === `${req.method} ${req.path}`) {
+      server.failNext = null
+      res.sendStatus(fail.status)
+      return
+    }
+    next()
   })
   app.get(COURSE_PATH, (_req, res) => {
     res.json(server.course)
@@ -157,6 +172,9 @@ describe('the course on a server that is not the master', () => {
     here.course = { ...NONE }
     master.writes = []
     here.writes = []
+    master.failNext = null
+    here.failNext = null
+    here.accessRequests = 0
     isMaster = false
   })
 
@@ -219,5 +237,34 @@ describe('the course on a server that is not the master', () => {
     here.course = { ...NONE, nextPoint: { position: { latitude: 5, longitude: 6 } } }
     await make('master').sync()
     expect([...master.writes, ...here.writes]).toEqual([])
+  })
+  it('sends a change again that reached the master only in part', async () => {
+    const course = make('partial')
+    await course.sync()
+    here.course = { ...NONE, activeRoute: ROUTE, targetArrivalTime: '2026-11-17T08:00:00Z' }
+    master.failNext = { request: 'PUT /targetArrivalTime', status: 500 }
+    await course.sync()
+    expect(courseSetting(master.course)?.route).toEqual(ROUTE)
+    await course.sync()
+    expect(courseSetting(master.course)).toEqual(courseSetting(here.course))
+    expect(courseSetting(here.course)?.targetArrivalTime).toBe('2026-11-17T08:00:00Z')
+  })
+
+  it('asks for its own access again when this server refuses it', async () => {
+    const course = make('refused')
+    await course.sync()
+    expect(here.accessRequests).toBe(1)
+    here.failNext = { request: 'GET /', status: 401 }
+    await course.sync()
+    await course.sync()
+    expect(here.accessRequests).toBe(2)
+  })
+
+  it('writes nothing once stopped', async () => {
+    const course = make('stopped')
+    master.course = { ...NONE, activeRoute: ROUTE }
+    course.stop()
+    await course.sync()
+    expect(here.writes).toEqual([])
   })
 })
