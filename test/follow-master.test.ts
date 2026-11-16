@@ -13,6 +13,7 @@ import express from 'express'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 
 import { MasterFollower, type FollowHost } from '../src/follow-master.js'
+import { OwnServerAccess } from '../src/own-access.js'
 import { ROUTE_PREFIX } from '../src/peer-client.js'
 import { MultihelmStore } from '../src/store.js'
 import type { SourcePriorities } from '../src/source-priorities.js'
@@ -116,10 +117,20 @@ describe('MasterFollower', () => {
     fs.rmSync(dir, { recursive: true, force: true })
   })
 
-  function follower(name: string, options: Partial<FollowHost> = {}): MasterFollower {
-    return new MasterFollower({
-      store: new MultihelmStore(path.join(dir, name)),
+  function ownAccess(store: MultihelmStore): OwnServerAccess {
+    return new OwnServerAccess({
+      store,
       serverId: 'member-1',
+      ownUrl: () => own.url,
+      debug: () => undefined
+    })
+  }
+
+  function follower(name: string, options: Partial<FollowHost> = {}): MasterFollower {
+    const store = new MultihelmStore(path.join(dir, name))
+    return new MasterFollower({
+      store,
+      access: ownAccess(store),
       ownUrl: () => own.url,
       localSettings: () => local,
       master: () => ({ url: master.url, token: 'pairing-token' }),
@@ -311,15 +322,16 @@ describe('MasterFollower', () => {
     approval = 'PENDING'
     calls.length = 0
     local = { vessel: { name: 'Old' }, meta: {} }
-    const f = follower('secure')
+    const access = ownAccess(new MultihelmStore(path.join(dir, 'secure')))
+    const f = follower('secure', { access })
     await f.run()
-    expect(f.waitingForApproval()).toBe(true)
+    expect(access.waitingForApproval()).toBe(true)
     expect(calls.map((c) => c.method)).toEqual(['POST'])
 
     approval = 'APPROVED'
     calls.length = 0
     await f.run()
-    expect(f.waitingForApproval()).toBe(false)
+    expect(access.waitingForApproval()).toBe(false)
     const put = calls.find((c) => c.method === 'PUT')
     expect(put?.auth).toBe('Bearer admin-token')
     security = false

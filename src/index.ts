@@ -30,6 +30,7 @@ import { ROUTE_PREFIX } from './peer-client.js'
 import { registerRoutes } from './routes.js'
 import type { OwnAccessState } from './status.js'
 import { hasResourcesApi, resourceOfPath, resourcesDataset } from './resources-dataset.js'
+import { OwnServerAccess } from './own-access.js'
 import { MultihelmStore } from './store.js'
 import { sourcePrioritiesFromSettings } from './source-priorities.js'
 import { vesselSettingsFromDeltas, type VesselSettings } from './vessel-settings.js'
@@ -108,7 +109,7 @@ export default function (app: ServerAPI): Plugin {
   let masterProxy: MasterProxy | null = null
   let stopRoleStatus: (() => void) | null = null
   let stopFollowing: (() => void) | null = null
-  let masterFollower: MasterFollower | null = null
+  let ownAccess: OwnServerAccess | null = null
 
   function localVesselSettings(): VesselSettings | null {
     const deltas = host.config?.baseDeltaEditor?.deltas
@@ -132,10 +133,10 @@ export default function (app: ServerAPI): Plugin {
   }
 
   function ownAccessState(): OwnAccessState {
-    if (masterFollower?.waitingForApproval()) {
-      return { state: 'waiting-approval', request: masterFollower.accessRequestId() }
+    if (ownAccess?.waitingForApproval()) {
+      return { state: 'waiting-approval', request: ownAccess.requestId() }
     }
-    return masterFollower?.denied() ? { state: 'denied' } : null
+    return ownAccess?.denied() ? { state: 'denied' } : null
   }
 
   /** Deletions are learnt from the server's deltas: only they show that one was stored. */
@@ -242,9 +243,18 @@ export default function (app: ServerAPI): Plugin {
         masterPath: (target) => `${ROUTE_PREFIX}${MASTER_ROUTE}${target}`,
         fetchMaster: (target) => proxy.fetch(target)
       })
-      const follower = new MasterFollower({
+      const access = new OwnServerAccess({
         store,
         serverId: mh.serverId,
+        ownUrl,
+        debug: (msg) => {
+          app.debug(msg)
+        }
+      })
+      ownAccess = access
+      const follower = new MasterFollower({
+        store,
+        access,
         ownUrl,
         localSettings: localVesselSettings,
         master: () => mh.masterAccess(),
@@ -258,12 +268,11 @@ export default function (app: ServerAPI): Plugin {
           app.error(msg)
         }
       })
-      masterFollower = follower
       const showRole = (): void => {
         const text = statusText(mh.role(), mh.master(), mh.masterConflict())
-        if (follower.waitingForApproval()) {
+        if (access.waitingForApproval()) {
           app.setPluginStatus(`${text}; ${APPROVE_HINT}`)
-        } else if (follower.denied()) {
+        } else if (access.denied()) {
           app.setPluginStatus(`${text}; ${DENIED_HINT}`)
         } else {
           app.setPluginStatus(text)
@@ -331,7 +340,7 @@ export default function (app: ServerAPI): Plugin {
     stop() {
       stopFollowing?.()
       stopFollowing = null
-      masterFollower = null
+      ownAccess = null
       stopRoleStatus?.()
       stopRoleStatus = null
       if (multihelm) {
