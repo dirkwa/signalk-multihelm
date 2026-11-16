@@ -22,6 +22,7 @@ import {
 } from './api.js'
 import { MasterAutopilot } from './autopilot-from-master.js'
 import { MasterControlAccess } from './master-control.js'
+import { MasterCourse } from './course-from-master.js'
 import { ServerDiscovery } from './discovery.js'
 import { ConfigSchema } from './config.js'
 import { MasterFollower } from './follow-master.js'
@@ -59,6 +60,7 @@ type Config = {
   followSourcePriorities?: unknown
   historyFromMaster?: unknown
   autopilotFromMaster?: unknown
+  courseFromMaster?: unknown
 }
 
 const APPROVE_HINT =
@@ -406,6 +408,23 @@ export default function (app: ServerAPI): Plugin {
             })
           : null
       autopilot?.start()
+      const course =
+        settings.courseFromMaster !== false
+          ? new MasterCourse({
+              master: () => {
+                const masterAccess = mh.masterAccess()
+                const master = mh.role() === 'master' ? null : mh.master()
+                return masterAccess && master ? { id: master.id, access: masterAccess } : null
+              },
+              control,
+              own: access,
+              ownUrl,
+              debug: (msg) => {
+                app.debug(msg)
+              }
+            })
+          : null
+      course?.start()
       const stopRoleAutopilot = mh.onRoleChanged(() => {
         autopilot?.roleChanged()
       })
@@ -418,6 +437,7 @@ export default function (app: ServerAPI): Plugin {
         settingsHandle.unregister()
         stopRoleAutopilot()
         autopilot?.stop()
+        course?.stop()
         clearInterval(followTimer)
         stopRoleFollow()
         clearInterval(historyTimer)

@@ -63,6 +63,12 @@ sets by hand on one server (see `README.md`).
   for when an autopilot is first found); publishes the master's state each
   second. Steps aside (`autopilotApi.unRegister`) the moment this server
   becomes the master, before its own provider starts.
+- `course-from-master.ts` — `MasterCourse`: on a member, keeps the course
+  (destination or route with its point, arrival circle, arrival time) the
+  same as the master's through both Course APIs each second: a change made
+  here alone goes to the master with the control token, anything else takes
+  the master's over with the own admin token. The setting is compared and
+  written, never the action, so arrivals do not advance twice.
 - `configpanel/` — the settings panel the admin UI shows in place of the
   schema form (Module Federation, `vite.panel.config.ts`): pairing, peers,
   the role, the settings. It uses the admin UI's React through
