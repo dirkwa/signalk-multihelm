@@ -97,6 +97,8 @@ export class MasterAutopilot {
   private stopped = false
   /** The access request or poll in flight for each master, shared by everyone waiting for it. */
   private readonly asking = new Map<string, Promise<string | null>>()
+  /** The master asked for last; an answer from an earlier one is no longer saved. */
+  private latestMaster: string | null = null
 
   constructor(private readonly host: AutopilotHost) {
     this.control = host.store.loadControlAccess()
@@ -271,7 +273,9 @@ export class MasterAutopilot {
       )
     } catch (error) {
       if (error instanceof PeerHttpError && (error.status === 401 || error.status === 403)) {
-        this.saveControl(null)
+        if (this.control?.masterId === master.id && this.control.token === token) {
+          this.saveControl(null)
+        }
       }
       throw this.asAutopilotError(error)
     }
@@ -299,6 +303,7 @@ export class MasterAutopilot {
 
   /** The readwrite token on the master, asked for when there is none; null until approved. */
   private controlToken(master: MasterOfBoat): Promise<string | null> {
+    this.latestMaster = master.id
     let token = this.asking.get(master.id)
     if (!token) {
       token = this.askControl(master).finally(() => {
@@ -332,6 +337,9 @@ export class MasterAutopilot {
             )
     } catch (error) {
       this.host.debug(`Multihelm: access request on the master: ${errorText(error)}`)
+      return null
+    }
+    if (master.id !== this.latestMaster) {
       return null
     }
     switch (result.kind) {

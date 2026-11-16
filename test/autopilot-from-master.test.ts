@@ -47,6 +47,12 @@ describe("the master's autopilot on another server", () => {
         20
       )
     })
+    app.post('/slow/signalk/v1/access/requests', (_req, res) => {
+      setTimeout(
+        () => res.status(202).json({ state: 'PENDING', href: '/signalk/v1/requests/9' }),
+        60
+      )
+    })
     app.get('/signalk/v1/requests/7', (_req, res) => {
       res.json(
         approval === 'PENDING'
@@ -127,7 +133,15 @@ describe("the master's autopilot on another server", () => {
       store: new MultihelmStore(path.join(root, name)),
       serverId: 'port',
       master: () =>
-        isMaster ? null : { id: masterId, access: { url: master.url, token: 'pairing-token' } },
+        isMaster
+          ? null
+          : {
+              id: masterId,
+              access: {
+                url: masterId === 'slow' ? `${master.url}/slow` : master.url,
+                token: 'pairing-token'
+              }
+            },
       isMaster: () => isMaster,
       register: (p, devices) => {
         provider = p
@@ -252,6 +266,22 @@ describe("the master's autopilot on another server", () => {
     asked.push(m.autopilot.findDevices())
     await Promise.all(asked)
     expect(accessRequests).toBe(2)
+  })
+
+  it("keeps the current master's request when an earlier master answers late", async () => {
+    security = true
+    approval = 'PENDING'
+    const m = make('late')
+    await m.autopilot.findDevices()
+    m.setMasterId('slow')
+    const late = m
+      .provider()
+      .engage('raymarine')
+      .catch(() => undefined)
+    m.setMasterId('salon')
+    await m.autopilot.findDevices()
+    await late
+    expect(m.autopilot.waitingForApproval()?.masterId).toBe('salon')
   })
 
   it('says so when the master denied the request', async () => {
