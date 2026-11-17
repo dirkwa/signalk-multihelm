@@ -11,6 +11,7 @@ import {
   COURSE_PATH,
   MasterCourse,
   courseSetting,
+  onTheWay,
   writeCourse,
   type CourseSetting
 } from '../src/course-from-master.js'
@@ -127,6 +128,20 @@ describe('the course in a Course API answer', () => {
       targetArrivalTime: null
     })
     expect(courseSetting('nothing')).toBeNull()
+  })
+})
+
+describe('a course on the way from one setting to another', () => {
+  it('has each part as in one of them', () => {
+    const from: CourseSetting = {
+      route: null,
+      point: null,
+      arrivalCircle: 0,
+      targetArrivalTime: null
+    }
+    const to: CourseSetting = { ...from, route: ROUTE, targetArrivalTime: '2026-11-17T08:00:00Z' }
+    expect(onTheWay({ ...from, route: ROUTE }, from, to)).toBe(true)
+    expect(onTheWay({ ...from, route: ROUTE, arrivalCircle: 99 }, from, to)).toBe(false)
   })
 })
 
@@ -258,6 +273,19 @@ describe('the course on a server that is not the master', () => {
     await course.sync()
     await course.sync()
     expect(here.accessRequests).toBe(2)
+  })
+
+  it('keeps a change made on the master while a partial change from here waits', async () => {
+    const course = make('partial-then-master')
+    await course.sync()
+    here.course = { ...NONE, activeRoute: ROUTE, targetArrivalTime: '2026-11-17T08:00:00Z' }
+    master.failNext = { request: 'PUT /targetArrivalTime', status: 500 }
+    await course.sync()
+    master.course = { ...master.course, arrivalCircle: 99 }
+    const sent = master.writes.length
+    await course.sync()
+    expect(master.writes).toHaveLength(sent)
+    expect(courseSetting(here.course)).toEqual(courseSetting(master.course))
   })
 
   it('writes nothing once stopped', async () => {

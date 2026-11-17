@@ -119,13 +119,27 @@ export async function writeCourse(
   }
 }
 
+/**
+ * Whether `course` lies between `from` and `to`: each part as in one or the
+ * other, as after a write from one to the other that stopped part way.
+ */
+export function onTheWay(course: CourseSetting, from: CourseSetting, to: CourseSetting): boolean {
+  return (Object.keys(course) as (keyof CourseSetting)[]).every(
+    (key) => isDeepStrictEqual(course[key], from[key]) || isDeepStrictEqual(course[key], to[key])
+  )
+}
+
 export class MasterCourse {
   private timer: NodeJS.Timeout | null = null
   private running = false
   /** The course both servers last agreed on, and the master it was agreed with. */
   private agreed: { masterId: string; course: CourseSetting } | null = null
-  /** A course set here whose sending to the master has not completed: sent again while it stays. */
-  private sending: { masterId: string; course: CourseSetting } | null = null
+  /**
+   * A course set here whose sending to the master has not completed, and the
+   * master's course it was sent over: sent again while the master's course is
+   * still on the way from one to the other, and nobody else changed it.
+   */
+  private sending: { masterId: string; from: CourseSetting; course: CourseSetting } | null = null
   private stopped = false
 
   constructor(private readonly host: CourseHost) {}
@@ -185,36 +199,51 @@ export class MasterCourse {
       this.sending = null
       return
     }
-    const resend =
+    const sending =
       this.sending?.masterId === master.id && isDeepStrictEqual(this.sending.course, ours)
+        ? this.sending
+        : null
+    const from = sending
+      ? onTheWay(theirs, sending.from, ours)
+        ? sending.from
+        : null
+      : agreed && isDeepStrictEqual(theirs, agreed)
+        ? agreed
+        : null
     // Changed here alone, or still on its way: the master takes it over. Otherwise the master's course holds.
-    if (resend || (agreed && isDeepStrictEqual(theirs, agreed))) {
-      await this.send(master, ours, resend ? null : agreed)
+    if (from) {
+      await this.send(master, ours, from, sending !== null)
       return
     }
     this.sending = null
-    await this.guarded(() => writeCourse(here, ours, theirs), refusedHere)
+    await this.guarded(() => writeCourse(this.whileFor(master, here), ours, theirs), refusedHere)
     this.agreed = { masterId: master.id, course: theirs }
     this.host.debug("Multihelm: took the master's course over")
   }
 
-  /** Sends `ours` to the master, if the master's course is still `expected` (any, when null). */
+  /**
+   * Sends `ours` to the master, if its course is still `from`, or on the way
+   * from `from` to `ours` when an earlier sending stopped part way.
+   */
   private async send(
     master: MasterOfBoat,
     ours: CourseSetting,
-    expected: CourseSetting | null
+    from: CourseSetting,
+    resending: boolean
   ): Promise<void> {
     const controlToken = await this.host.control.token(master)
     if (controlToken === null) {
       return
     }
     const theirs = await this.readMaster(master)
-    if (!theirs || !this.stillFor(master) || (expected && !isDeepStrictEqual(theirs, expected))) {
+    const unchanged =
+      theirs && (resending ? onTheWay(theirs, from, ours) : isDeepStrictEqual(theirs, from))
+    if (!theirs || !unchanged || !this.stillFor(master)) {
       return
     }
-    this.sending = { masterId: master.id, course: ours }
+    this.sending = { masterId: master.id, from, course: ours }
     await this.guarded(
-      () => writeCourse(this.masterCall(master, controlToken), theirs, ours),
+      () => writeCourse(this.whileFor(master, this.masterCall(master, controlToken)), theirs, ours),
       () => {
         this.host.control.revoked(master.id, controlToken)
       }
@@ -222,6 +251,14 @@ export class MasterCourse {
     this.sending = null
     this.agreed = { masterId: master.id, course: ours }
     this.host.debug('Multihelm: sent the course set here to the master')
+  }
+
+  /** `call`, refusing each request once the pass may no longer write for `master`. */
+  private whileFor(master: MasterOfBoat, call: Call): Call {
+    return (method, path, body) =>
+      this.stillFor(master)
+        ? call(method, path, body)
+        : Promise.reject(new Error('stopped, or the master changed'))
   }
 
   private async readMaster(master: MasterOfBoat): Promise<CourseSetting | null> {
