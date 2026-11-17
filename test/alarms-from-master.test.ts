@@ -370,17 +370,19 @@ describe("the master's alarms on another server", () => {
     expect([...here.alarms.keys()]).toEqual([own])
   })
 
-  it('shows what the master adds to an alarm, keeping its acknowledgement here', async () => {
+  it('shows what the master adds to an alarm, keeping an acknowledgement here the master has yet to take', async () => {
     const here = new Notifications()
     const alarms = make('data', here)
     master.set('m1', alarm({ path: DEPTH, data: { depth: 1.2 } }))
     await alarms.sync()
     const [id] = [...here.alarms.keys()]
     here.acknowledge(id as NotificationId)
+    failPosts = 1
     await alarms.sync()
-    master.set('m1', alarm({ path: DEPTH, data: { depth: 0.6 }, acknowledged: true }))
+    master.set('m1', alarm({ path: DEPTH, data: { depth: 0.6 } }))
     await alarms.sync()
     expect(here.alarms.get(id ?? '')).toMatchObject({ data: { depth: 0.6 }, acknowledged: true })
+    expect(posted).toEqual(['m1 acknowledge'])
   })
 
   it('shows no alarm of the master that this server raised itself while a send waited', async () => {
