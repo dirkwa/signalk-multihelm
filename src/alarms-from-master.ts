@@ -84,7 +84,6 @@ function errorText(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
 }
 
-/** The active alarms in a Notifications API listing. */
 export function activeAlarms(listing: unknown): Alarm[] {
   if (!isRecord(listing)) {
     return []
@@ -236,7 +235,6 @@ export class MasterAlarms {
     return own
   }
 
-  /** The alarm shown here for the master's, made to show what the master's does. */
   private mirrored(mirror: Alarm | undefined, theirs: Alarm, masterId: string): Alarm {
     const notifications = this.host.notifications
     const data = { ...theirs.data, [FROM_MASTER]: masterId, [MASTER_ALARM]: theirs.id }
@@ -268,7 +266,6 @@ export class MasterAlarms {
       : { ...shown, id: mirror.id }
   }
 
-  /** Brings a silence or acknowledgement given on one side to the other; returns where this one is now. */
   private async keepInStep(master: MasterOfBoat, here: Alarm, theirs: Alarm): Promise<Seen> {
     const last = this.seen.get(here.id)
     const before = last?.masterId === master.id && last.theirId === theirs.id ? last : null
@@ -308,7 +305,6 @@ export class MasterAlarms {
     return now
   }
 
-  /** Whether the master took it. */
   private async sendToMaster(master: MasterOfBoat, alarm: Alarm, action: Action): Promise<boolean> {
     const token = await this.host.control.token(master)
     if (token === null || !this.stillFor(master)) {
@@ -334,7 +330,6 @@ export class MasterAlarms {
     return true
   }
 
-  /** Takes off every alarm shown here for a master but those to keep. */
   private clearMirrors(keep: (mirror: Alarm) => boolean): void {
     const notifications = this.host.notifications
     for (const alarm of activeAlarms(notifications.list())) {
