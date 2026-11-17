@@ -167,6 +167,28 @@ On the master itself Multihelm steps aside, so its own provider serves.
 Turn it off per server with **Operate the master's autopilot from this
 server**.
 
+## The course from every station
+
+The active destination or route is the same on every server: set it at any
+station, and all the others take it over. A server that is not the master
+reads its own course and the master's each second. When only its own
+changed, it sends it to the master, and the other servers take it over from
+there; otherwise it takes the master's over. Two stations changing the course
+within the same second is the one case where the master's course holds.
+
+What is kept in step is the course as set: the destination, or the route,
+its direction and the point it is on, the arrival circle and the target
+arrival time. So when the master and another station both move on to the
+next point at an arrival, they end on the same point, not one further. Each
+server works out bearings and cross-track error from its own position, and
+a leg that starts at the vessel's position starts where that server was when
+it took the course over.
+
+Sending the course to the master uses the same write access on the master as
+the autopilot (see above), and taking it over the same admin access on this
+server as the vessel settings. Turn it off per server with **Keep the course
+the same as on the master**.
+
 ## History from the master
 
 While the master has a History API provider (signalk-questdb, for example),

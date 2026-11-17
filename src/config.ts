@@ -42,6 +42,12 @@ export const ConfigSchema = Type.Object({
     description:
       "This server's Autopilot API serves the master's autopilot, so a chartplotter here operates it, while only the master sends to it. Put the autopilot provider plugin on the list of plugins that run on the master only. Does nothing on the master.",
     default: true
+  }),
+  courseFromMaster: Type.Boolean({
+    title: 'Keep the course the same as on the master',
+    description:
+      "This server takes the master's active destination or route over, and a destination or route set here is sent to the master, so every station follows the same course. Does nothing on the master.",
+    default: true
   })
 })
 

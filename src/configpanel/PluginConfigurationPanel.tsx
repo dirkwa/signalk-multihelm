@@ -43,7 +43,8 @@ function withDefaults(configuration: Settings | undefined): Required<Settings> {
     followMetadata: configuration?.followMetadata !== false,
     followSourcePriorities: configuration?.followSourcePriorities !== false,
     historyFromMaster: configuration?.historyFromMaster !== false,
-    autopilotFromMaster: configuration?.autopilotFromMaster !== false
+    autopilotFromMaster: configuration?.autopilotFromMaster !== false,
+    courseFromMaster: configuration?.courseFromMaster !== false
   }
 }
 
@@ -251,9 +252,9 @@ function StatusNotices({
       )}
       {status.controlAccess && (
         <div className="alert alert-warning">
-          To operate the autopilot from this station, approve Multihelm&apos;s request{' '}
-          <code>{status.controlAccess.request}</code> under Security → Access Requests on the
-          master, {status.master?.name ?? 'the master'}.
+          To operate the autopilot and set the course from this station, approve Multihelm&apos;s
+          request <code>{status.controlAccess.request}</code> under Security → Access Requests on
+          the master, {status.master?.name ?? 'the master'}.
         </div>
       )}
       {own?.state === 'denied' && (
@@ -684,6 +685,12 @@ function SettingsCard({ configuration, save }: Props) {
           'autopilotFromMaster',
           "Operate the master's autopilot from this server",
           "A chartplotter here operates the master's autopilot, while only the master sends to it. Put the autopilot provider plugin on the list of plugins that run on the master only.",
+          onMaster
+        )}
+        {option(
+          'courseFromMaster',
+          'Keep the course the same as on the master',
+          'The active destination or route set at any station is taken over by all the others.',
           onMaster
         )}
         <button
