@@ -3,12 +3,15 @@
  * and stations on one NMEA 2000 bus raise the same alarm themselves.
  */
 
+import { isDeepStrictEqual } from 'node:util'
+
 import type {
   AlarmProperties,
   AlarmRaiseOptions,
   AlarmUpdateOptions,
   ALARM_STATE,
   NotificationId,
+  NotificationsApi,
   Path,
   Value
 } from '@signalk/server-api'
@@ -29,6 +32,24 @@ export interface LocalNotifications {
   clear: (id: NotificationId) => void
   silence: (id: NotificationId) => void
   acknowledge: (id: NotificationId) => void
+}
+
+/**
+ * The server's Notifications API, while the server manages notifications:
+ * older servers lack it, and with management off it still raises alarms but
+ * can no longer clear, silence or acknowledge them.
+ */
+export function managedNotifications(api: unknown): LocalNotifications | null {
+  const notifications = api as Partial<LocalNotifications & NotificationsApi> | undefined
+  if (typeof notifications?.list !== 'function' || typeof notifications.getId !== 'function') {
+    return null
+  }
+  try {
+    notifications.getId('signalk-multihelm-probe' as NotificationId)
+  } catch {
+    return null
+  }
+  return notifications as LocalNotifications
 }
 
 export interface AlarmsHost {
@@ -174,21 +195,18 @@ export class MasterAlarms {
     }
     // A server that was a member a moment ago may still show another master's alarms.
     const theirs = byPath(activeAlarms(listing).filter((alarm) => !isMirror(alarm)))
-    const own = byPath(activeAlarms(this.host.notifications.list()).filter((a) => !isMirror(a)))
     this.clearMirrors(
       (mirror) =>
         mirror.data[FROM_MASTER] === master.id &&
-        mirror.data[MASTER_ALARM] === theirs.get(mirror.path)?.id &&
-        !own.has(mirror.path)
+        mirror.data[MASTER_ALARM] === theirs.get(mirror.path)?.id
     )
-    const mirrors = byPath(activeAlarms(this.host.notifications.list()).filter(isMirror))
     const seen = new Map<string, Seen>()
     for (const [path, alarm] of theirs) {
       if (!this.stillFor(master)) {
         return
       }
       try {
-        const here = own.get(path) ?? this.mirrored(mirrors.get(path), alarm, master.id)
+        const here = this.alarmHere(path, alarm, master.id)
         seen.set(here.id, await this.keepInStep(master, here, alarm))
       } catch (error) {
         this.host.debug(`Multihelm: the master's alarm ${path}: ${errorText(error)}`)
@@ -199,6 +217,23 @@ export class MasterAlarms {
 
   private stillFor(master: MasterOfBoat): boolean {
     return !this.stopped && this.host.master()?.id === master.id
+  }
+
+  /**
+   * This server's own alarm on the path, or the one shown for the master's.
+   * Read again for each alarm, since the server may have raised one of its own while a send waited.
+   */
+  private alarmHere(path: string, theirs: Alarm, masterId: string): Alarm {
+    const here = activeAlarms(this.host.notifications.list()).filter((a) => a.path === path)
+    const own = here.find((alarm) => !isMirror(alarm))
+    const mirror = here.find(isMirror)
+    if (!own) {
+      return this.mirrored(mirror, theirs, masterId)
+    }
+    if (mirror) {
+      this.host.notifications.clear(mirror.id as NotificationId)
+    }
+    return own
   }
 
   /** The alarm shown here for the master's, made to show what the master's does. */
@@ -215,7 +250,11 @@ export class MasterAlarms {
       })
       return { ...shown, id }
     }
-    if (mirror.state === theirs.state && mirror.message === theirs.message) {
+    if (
+      mirror.state === theirs.state &&
+      mirror.message === theirs.message &&
+      isDeepStrictEqual(mirror.data, data)
+    ) {
       return mirror
     }
     notifications.update(mirror.id as NotificationId, {
@@ -225,7 +264,7 @@ export class MasterAlarms {
     })
     // The server takes a silence and an acknowledgement off an alarm whose state changes.
     return mirror.state === theirs.state
-      ? { ...mirror, message: theirs.message }
+      ? { ...mirror, message: theirs.message, data }
       : { ...shown, id: mirror.id }
   }
 

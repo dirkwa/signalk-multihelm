@@ -20,7 +20,7 @@ import {
   type PeerInfo,
   type Role
 } from './api.js'
-import { MasterAlarms, type LocalNotifications } from './alarms-from-master.js'
+import { MasterAlarms, managedNotifications } from './alarms-from-master.js'
 import { MasterAutopilot } from './autopilot-from-master.js'
 import { MasterControlAccess } from './master-control.js'
 import { MasterCourse } from './course-from-master.js'
@@ -108,14 +108,6 @@ function autopilotWithdrawal(app: ServerAPI): (() => void) | null {
   return () => {
     unRegister.call(api, PLUGIN_ID)
   }
-}
-
-/** The server's Notifications API, which older servers lack. */
-function localNotifications(app: ServerAPI): LocalNotifications | null {
-  const api = (app as { notifications?: Partial<LocalNotifications> }).notifications
-  return typeof api?.list === 'function' && typeof api.raise === 'function'
-    ? (api as LocalNotifications)
-    : null
 }
 
 /** The server takes the source policy of a plugin's subscription as an argument, not from the command. */
@@ -435,7 +427,7 @@ export default function (app: ServerAPI): Plugin {
             })
           : null
       course?.start()
-      const notifications = localNotifications(app)
+      const notifications = managedNotifications(app.notifications)
       const alarms =
         settings.alarmsFromMaster !== false && notifications
           ? new MasterAlarms({

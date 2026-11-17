@@ -208,8 +208,8 @@ by path, as each server gives its alarms ids of its own. An alarm the master
 does not have stays this server's own.
 
 This uses the same write access on the master as the autopilot (see above).
-It needs the server's Notifications API, and does nothing on servers
-without it. Turn it off per server with **Show the master's alarms here**.
+It needs the server's Notifications API with notification management on,
+and does nothing otherwise. Turn it off per server with **Show the master's alarms here**.
 
 ## History from the master
 

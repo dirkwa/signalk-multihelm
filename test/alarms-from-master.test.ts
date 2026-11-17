@@ -18,6 +18,7 @@ import {
   MASTER_ALARM,
   MasterAlarms,
   NOTIFICATIONS_PATH,
+  managedNotifications,
   type LocalNotifications
 } from '../src/alarms-from-master.js'
 import { MasterControlAccess } from '../src/master-control.js'
@@ -367,5 +368,53 @@ describe("the master's alarms on another server", () => {
     open()
     await pass
     expect([...here.alarms.keys()]).toEqual([own])
+  })
+
+  it('shows what the master adds to an alarm, keeping its acknowledgement here', async () => {
+    const here = new Notifications()
+    const alarms = make('data', here)
+    master.set('m1', alarm({ path: DEPTH, data: { depth: 1.2 } }))
+    await alarms.sync()
+    const [id] = [...here.alarms.keys()]
+    here.acknowledge(id as NotificationId)
+    await alarms.sync()
+    master.set('m1', alarm({ path: DEPTH, data: { depth: 0.6 }, acknowledged: true }))
+    await alarms.sync()
+    expect(here.alarms.get(id ?? '')).toMatchObject({ data: { depth: 0.6 }, acknowledged: true })
+  })
+
+  it('shows no alarm of the master that this server raised itself while a send waited', async () => {
+    const here = new Notifications()
+    const alarms = make('own-mid-pass', here)
+    const engine = here.raise({ path: ENGINE as never, state: 'alarm' as never, message: 'Hot' })
+    master.set('m2', alarm({ path: ENGINE }))
+    await alarms.sync()
+    here.acknowledge(engine)
+    master.set('m1', alarm({ path: DEPTH }))
+    let open: () => void = () => undefined
+    accessGate = new Promise((resolve) => (open = resolve))
+    const asked = new Promise<void>((resolve) => (accessAsked = resolve))
+    const pass = alarms.sync()
+    await asked
+    const depth = here.raise({ path: DEPTH as never, state: 'alarm' as never, message: 'Shallow' })
+    open()
+    await pass
+    expect([...here.alarms.keys()]).toEqual([engine, depth])
+  })
+})
+
+describe("the server's Notifications API", () => {
+  it('is used only while the server manages notifications', () => {
+    const managed = { list: () => ({}), getId: () => undefined }
+    expect(managedNotifications(managed)).toBe(managed)
+    expect(
+      managedNotifications({
+        list: () => ({}),
+        getId: () => {
+          throw new Error('Notification management is disabled')
+        }
+      })
+    ).toBeNull()
+    expect(managedNotifications(undefined)).toBeNull()
   })
 })

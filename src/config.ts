@@ -52,7 +52,7 @@ export const ConfigSchema = Type.Object({
   alarmsFromMaster: Type.Boolean({
     title: "Show the master's alarms here",
     description:
-      'Every active alarm on the master also sounds here, and silencing or acknowledging an alarm here does it on the master and every other station. An alarm this server raises itself on the same path is not shown twice. Does nothing on the master, or on a server without the Notifications API.',
+      'Every active alarm on the master also sounds here, and silencing or acknowledging an alarm here does it on the master and every other station. An alarm this server raises itself on the same path is not shown twice. Does nothing on the master, or on a server without the Notifications API or with notification management off.',
     default: true
   })
 })
