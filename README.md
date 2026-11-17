@@ -189,6 +189,28 @@ the autopilot (see above), and taking it over the same admin access on this
 server as the vessel settings. Turn it off per server with **Keep the course
 the same as on the master**.
 
+## Alarms from every station
+
+Every active alarm on the master sounds on every station, and silencing or
+acknowledging it at any station does it at all of them. A server that is not
+the master reads the master's alarms each second and raises each one through
+its own Notifications API, marked as the master's, so its chartplotters show
+and sound it like any other. Silencing or acknowledging one here is sent to
+the master, and whatever the master has silenced or acknowledged is done
+here too. When the master clears an alarm, or another server becomes the
+master, the alarm goes from this server as well.
+
+Stations on the same NMEA 2000 bus see the same alarm themselves. A server
+that already has an alarm of its own on a path does not show the master's
+on top of it: it keeps its own and only keeps it in step, so silencing it
+here silences it on the master and the other way round. Alarms are matched
+by path, as each server gives its alarms ids of its own. An alarm the master
+does not have stays this server's own.
+
+This uses the same write access on the master as the autopilot (see above).
+It needs the server's Notifications API, and does nothing on servers
+without it. Turn it off per server with **Show the master's alarms here**.
+
 ## History from the master
 
 While the master has a History API provider (signalk-questdb, for example),

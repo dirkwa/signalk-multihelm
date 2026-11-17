@@ -44,7 +44,8 @@ function withDefaults(configuration: Settings | undefined): Required<Settings> {
     followSourcePriorities: configuration?.followSourcePriorities !== false,
     historyFromMaster: configuration?.historyFromMaster !== false,
     autopilotFromMaster: configuration?.autopilotFromMaster !== false,
-    courseFromMaster: configuration?.courseFromMaster !== false
+    courseFromMaster: configuration?.courseFromMaster !== false,
+    alarmsFromMaster: configuration?.alarmsFromMaster !== false
   }
 }
 
@@ -252,9 +253,9 @@ function StatusNotices({
       )}
       {status.controlAccess && (
         <div className="alert alert-warning">
-          To operate the autopilot and set the course from this station, approve Multihelm&apos;s
-          request <code>{status.controlAccess.request}</code> under Security → Access Requests on
-          the master, {status.master?.name ?? 'the master'}.
+          To operate the autopilot, set the course and acknowledge alarms from this station, approve
+          Multihelm&apos;s request <code>{status.controlAccess.request}</code> under Security →
+          Access Requests on the master, {status.master?.name ?? 'the master'}.
         </div>
       )}
       {own?.state === 'denied' && (
@@ -691,6 +692,12 @@ function SettingsCard({ configuration, save }: Props) {
           'courseFromMaster',
           'Keep the course the same as on the master',
           'The active destination or route set at any station is taken over by all the others.',
+          onMaster
+        )}
+        {option(
+          'alarmsFromMaster',
+          "Show the master's alarms here",
+          'Silencing or acknowledging an alarm at any station does it at all the others. An alarm this server raises itself is not shown twice.',
           onMaster
         )}
         <button
