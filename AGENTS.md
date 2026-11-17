@@ -69,6 +69,11 @@ sets by hand on one server (see `README.md`).
   here alone goes to the master with the control token, anything else takes
   the master's over with the own admin token. The setting is compared and
   written, never the action, so arrivals do not advance twice.
+- `alarms-from-master.ts` — `MasterAlarms`: on a member, raises each active
+  alarm of the master through `app.notifications`, marked with
+  `data.multihelmMaster`, unless this server has an alarm of its own on the
+  path; silence and acknowledge go both ways, the master's with the control
+  token. Matched by path, since notification ids are per server.
 - `configpanel/` — the settings panel the admin UI shows in place of the
   schema form (Module Federation, `vite.panel.config.ts`): pairing, peers,
   the role, the settings. It uses the admin UI's React through

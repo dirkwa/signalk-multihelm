@@ -48,6 +48,12 @@ export const ConfigSchema = Type.Object({
     description:
       "This server takes the master's active destination or route over, and a destination or route set here is sent to the master, so every station follows the same course. Does nothing on the master.",
     default: true
+  }),
+  alarmsFromMaster: Type.Boolean({
+    title: "Show the master's alarms here",
+    description:
+      'Every active alarm on the master also sounds here, and silencing or acknowledging an alarm here does it on the master and every other station. An alarm this server raises itself on the same path is not shown twice. Does nothing on the master, or on a server without the Notifications API or with notification management off.',
+    default: true
   })
 })
 

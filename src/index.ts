@@ -20,6 +20,7 @@ import {
   type PeerInfo,
   type Role
 } from './api.js'
+import { MasterAlarms, managedNotifications } from './alarms-from-master.js'
 import { MasterAutopilot } from './autopilot-from-master.js'
 import { MasterControlAccess } from './master-control.js'
 import { MasterCourse } from './course-from-master.js'
@@ -61,6 +62,7 @@ type Config = {
   historyFromMaster?: unknown
   autopilotFromMaster?: unknown
   courseFromMaster?: unknown
+  alarmsFromMaster?: unknown
 }
 
 const APPROVE_HINT =
@@ -425,6 +427,23 @@ export default function (app: ServerAPI): Plugin {
             })
           : null
       course?.start()
+      const notifications = managedNotifications(app.notifications)
+      const alarms =
+        settings.alarmsFromMaster !== false && notifications
+          ? new MasterAlarms({
+              master: () => {
+                const masterAccess = mh.masterAccess()
+                const master = mh.role() === 'master' ? null : mh.master()
+                return masterAccess && master ? { id: master.id, access: masterAccess } : null
+              },
+              control,
+              notifications,
+              debug: (msg) => {
+                app.debug(msg)
+              }
+            })
+          : null
+      alarms?.start()
       const stopRoleAutopilot = mh.onRoleChanged(() => {
         autopilot?.roleChanged()
       })
@@ -438,6 +457,7 @@ export default function (app: ServerAPI): Plugin {
         stopRoleAutopilot()
         autopilot?.stop()
         course?.stop()
+        alarms?.stop()
         clearInterval(followTimer)
         stopRoleFollow()
         clearInterval(historyTimer)
