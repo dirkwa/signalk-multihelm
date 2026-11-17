@@ -1,16 +1,6 @@
 /**
- * The master's alarms on every server, silenced and acknowledged from any of
- * them. A server that is not the master reads the master's active alarms
- * each second and shows each one whose path it has no alarm of its own for,
- * as an alarm of its own raised through its Notifications API and marked as
- * the master's. An alarm on the same path that this server raises itself
- * (all servers on one NMEA 2000 bus see the same alarm) is left as it is and
- * only kept in step.
- *
- * Silencing or acknowledging here goes to the master, with the control token
- * there; whatever the master has silenced or acknowledged is then done here
- * too. Alarms are matched by path, as each server gives them ids of its own.
- * An alarm the master does not have stays this server's own business.
+ * Alarms are matched by path: each server gives its alarms ids of its own,
+ * and stations on one NMEA 2000 bus raise the same alarm themselves.
  */
 
 import type {
@@ -28,10 +18,10 @@ import { PeerHttpError, callPeer } from './peer-client.js'
 
 export const NOTIFICATIONS_PATH = '/signalk/v2/api/notifications'
 export const ALARMS_POLL_MS = 1_000
-/** In the data of an alarm shown for the master: the master's server id. */
+/** In the data of an alarm shown for the master: the master's server id, and its id for the alarm. */
 export const FROM_MASTER = 'multihelmMaster'
+export const MASTER_ALARM = 'multihelmMasterAlarm'
 
-/** The part of the server's Notifications API that Multihelm uses. */
 export interface LocalNotifications {
   list: () => Record<string, AlarmProperties>
   raise: (options: AlarmRaiseOptions) => NotificationId
@@ -49,7 +39,6 @@ export interface AlarmsHost {
   debug: (msg: string) => void
 }
 
-/** One alarm, as far as keeping it in step goes. */
 export interface Alarm {
   id: string
   path: string
@@ -116,12 +105,23 @@ function byPath(alarms: Alarm[]): Map<string, Alarm> {
   return paths
 }
 
+type Action = 'silence' | 'acknowledge'
+
+/** Where an alarm here was after the last pass, and for which alarm of which master. */
+interface Seen {
+  masterId: string
+  theirId: string
+  silenced: boolean
+  acknowledged: boolean
+  /** Given here, and not yet taken by the master. */
+  unsent: Action | null
+}
+
 export class MasterAlarms {
   private timer: NodeJS.Timeout | null = null
   private running = false
   private stopped = false
-  /** What each alarm here was after the last pass, to tell a silence or acknowledgement given here since. */
-  private seen = new Map<string, { silenced: boolean; acknowledged: boolean }>()
+  private seen = new Map<string, Seen>()
 
   constructor(private readonly host: AlarmsHost) {}
 
@@ -131,14 +131,13 @@ export class MasterAlarms {
     }, ALARMS_POLL_MS)
   }
 
-  /** Stops, and takes the master's alarms off this server. */
   stop(): void {
     this.stopped = true
     if (this.timer) {
       clearInterval(this.timer)
     }
     this.timer = null
-    this.clearMirrors(new Map(), null)
+    this.clearMirrors(() => false)
   }
 
   /** One pass; never rejects. */
@@ -159,31 +158,38 @@ export class MasterAlarms {
   private async syncOnce(): Promise<void> {
     const master = this.host.master()
     if (!master) {
-      this.clearMirrors(new Map(), null)
+      this.clearMirrors(() => false)
       return
     }
+    // Before asking, so a new master that does not answer leaves no alarms of the old one sounding.
+    this.clearMirrors((mirror) => mirror.data[FROM_MASTER] === master.id)
     const listing: unknown = await callPeer(
       'GET',
       master.access,
       NOTIFICATIONS_PATH,
       master.access.token
     )
-    if (this.stopped || this.host.master()?.id !== master.id) {
+    if (!this.stillFor(master)) {
       return
     }
     // A server that was a member a moment ago may still show another master's alarms.
     const theirs = byPath(activeAlarms(listing).filter((alarm) => !isMirror(alarm)))
-    const ours = activeAlarms(this.host.notifications.list())
-    const own = byPath(ours.filter((alarm) => !isMirror(alarm)))
-    this.clearMirrors(theirs, master.id, own)
+    const own = byPath(activeAlarms(this.host.notifications.list()).filter((a) => !isMirror(a)))
+    this.clearMirrors(
+      (mirror) =>
+        mirror.data[FROM_MASTER] === master.id &&
+        mirror.data[MASTER_ALARM] === theirs.get(mirror.path)?.id &&
+        !own.has(mirror.path)
+    )
     const mirrors = byPath(activeAlarms(this.host.notifications.list()).filter(isMirror))
-    const seen = new Map<string, { silenced: boolean; acknowledged: boolean }>()
+    const seen = new Map<string, Seen>()
     for (const [path, alarm] of theirs) {
+      if (!this.stillFor(master)) {
+        return
+      }
       try {
         const here = own.get(path) ?? this.mirrored(mirrors.get(path), alarm, master.id)
-        if (here) {
-          seen.set(here.id, await this.keepInStep(master, here, alarm))
-        }
+        seen.set(here.id, await this.keepInStep(master, here, alarm))
       } catch (error) {
         this.host.debug(`Multihelm: the master's alarm ${path}: ${errorText(error)}`)
       }
@@ -191,66 +197,83 @@ export class MasterAlarms {
     this.seen = seen
   }
 
-  /** The alarm shown here for the master's, once it shows what the master's does. */
-  private mirrored(mirror: Alarm | undefined, theirs: Alarm, masterId: string): Alarm | null {
+  private stillFor(master: MasterOfBoat): boolean {
+    return !this.stopped && this.host.master()?.id === master.id
+  }
+
+  /** The alarm shown here for the master's, made to show what the master's does. */
+  private mirrored(mirror: Alarm | undefined, theirs: Alarm, masterId: string): Alarm {
     const notifications = this.host.notifications
-    const data = { ...theirs.data, [FROM_MASTER]: masterId }
+    const data = { ...theirs.data, [FROM_MASTER]: masterId, [MASTER_ALARM]: theirs.id }
+    const shown = { ...theirs, data, silenced: false, acknowledged: false }
     if (!mirror) {
-      notifications.raise({
+      const id = notifications.raise({
         state: theirs.state,
         message: theirs.message,
         path: theirs.path as Path,
         data
       })
-      return null
+      return { ...shown, id }
     }
-    if (mirror.state !== theirs.state || mirror.message !== theirs.message) {
-      notifications.update(mirror.id as NotificationId, {
-        state: theirs.state,
-        message: theirs.message,
-        data
-      })
-      return null
+    if (mirror.state === theirs.state && mirror.message === theirs.message) {
+      return mirror
     }
-    return mirror
+    notifications.update(mirror.id as NotificationId, {
+      state: theirs.state,
+      message: theirs.message,
+      data
+    })
+    // The server takes a silence and an acknowledgement off an alarm whose state changes.
+    return mirror.state === theirs.state
+      ? { ...mirror, message: theirs.message }
+      : { ...shown, id: mirror.id }
   }
 
-  /** Brings a silence or acknowledgement given on one side to the other; returns what this one is now. */
-  private async keepInStep(
-    master: MasterOfBoat,
-    here: Alarm,
-    theirs: Alarm
-  ): Promise<{ silenced: boolean; acknowledged: boolean }> {
-    const before = this.seen.get(here.id)
-    const now = { silenced: here.silenced, acknowledged: here.acknowledged }
+  /** Brings a silence or acknowledgement given on one side to the other; returns where this one is now. */
+  private async keepInStep(master: MasterOfBoat, here: Alarm, theirs: Alarm): Promise<Seen> {
+    const last = this.seen.get(here.id)
+    const before = last?.masterId === master.id && last.theirId === theirs.id ? last : null
+    const now: Seen = {
+      masterId: master.id,
+      theirId: theirs.id,
+      silenced: here.silenced,
+      acknowledged: here.acknowledged,
+      unsent: null
+    }
     const id = here.id as NotificationId
     if (theirs.acknowledged && !here.acknowledged) {
       this.host.notifications.acknowledge(id)
-      return { silenced: here.silenced, acknowledged: true }
+      return { ...now, acknowledged: true }
     }
     if (theirs.silenced && !here.silenced && !here.acknowledged) {
       this.host.notifications.silence(id)
-      return { silenced: true, acknowledged: false }
+      return { ...now, silenced: true }
     }
     if (!before) {
       return now
     }
-    if (here.acknowledged && !before.acknowledged && !theirs.acknowledged) {
-      await this.sendToMaster(master, theirs, 'acknowledge')
-    } else if (here.silenced && !before.silenced && !theirs.silenced && !theirs.acknowledged) {
-      await this.sendToMaster(master, theirs, 'silence')
+    const unsent =
+      here.acknowledged &&
+      !theirs.acknowledged &&
+      (!before.acknowledged || before.unsent === 'acknowledge')
+        ? 'acknowledge'
+        : here.silenced &&
+            !theirs.silenced &&
+            !theirs.acknowledged &&
+            (!before.silenced || before.unsent === 'silence')
+          ? 'silence'
+          : null
+    if (unsent && !(await this.sendToMaster(master, theirs, unsent))) {
+      return { ...now, unsent }
     }
     return now
   }
 
-  private async sendToMaster(
-    master: MasterOfBoat,
-    alarm: Alarm,
-    action: 'silence' | 'acknowledge'
-  ): Promise<void> {
+  /** Whether the master took it. */
+  private async sendToMaster(master: MasterOfBoat, alarm: Alarm, action: Action): Promise<boolean> {
     const token = await this.host.control.token(master)
-    if (token === null || this.stopped || this.host.master()?.id !== master.id) {
-      return
+    if (token === null || !this.stillFor(master)) {
+      return false
     }
     try {
       await callPeer(
@@ -259,30 +282,24 @@ export class MasterAlarms {
         `${NOTIFICATIONS_PATH}/${encodeURIComponent(alarm.id)}/${action}`,
         token
       )
-      this.host.debug(`Multihelm: sent the ${action} of ${alarm.path} to the master`)
     } catch (error) {
       if (error instanceof PeerHttpError && (error.status === 401 || error.status === 403)) {
         this.host.control.revoked(master.id, token)
       }
-      throw error
+      this.host.debug(
+        `Multihelm: sending the ${action} of ${alarm.path} to the master: ${errorText(error)}`
+      )
+      return false
     }
+    this.host.debug(`Multihelm: sent the ${action} of ${alarm.path} to the master`)
+    return true
   }
 
-  /**
-   * Takes off the alarms shown for a master that no longer has them, for
-   * another master, or where this server has an alarm of its own on the path.
-   */
-  private clearMirrors(
-    theirs: Map<string, Alarm>,
-    masterId: string | null,
-    own: Map<string, Alarm> = new Map()
-  ): void {
+  /** Takes off every alarm shown here for a master but those to keep. */
+  private clearMirrors(keep: (mirror: Alarm) => boolean): void {
     const notifications = this.host.notifications
     for (const alarm of activeAlarms(notifications.list())) {
-      if (
-        isMirror(alarm) &&
-        (alarm.data[FROM_MASTER] !== masterId || !theirs.has(alarm.path) || own.has(alarm.path))
-      ) {
+      if (isMirror(alarm) && !keep(alarm)) {
         try {
           notifications.clear(alarm.id as NotificationId)
         } catch (error) {

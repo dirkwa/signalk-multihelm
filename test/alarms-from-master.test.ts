@@ -15,6 +15,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest'
 
 import {
   FROM_MASTER,
+  MASTER_ALARM,
   MasterAlarms,
   NOTIFICATIONS_PATH,
   type LocalNotifications
@@ -113,13 +114,20 @@ describe("the master's alarms on another server", () => {
   const master = new Map<string, Stored>()
   const posted: string[] = []
   let isMaster = false
+  let masterId = 'salon'
+  let masterUrl = ''
+  let failPosts = 0
+  /** While set, access requests wait for it. */
+  let accessGate: Promise<void> | null = null
+  let accessAsked: () => void = () => undefined
   let server: http.Server
   let url = ''
 
   beforeAll(async () => {
     const app = express()
     app.post('/signalk/v1/access/requests', (_req, res) => {
-      res.sendStatus(404)
+      accessAsked()
+      void (accessGate ?? Promise.resolve()).then(() => res.sendStatus(404))
     })
     app.get(NOTIFICATIONS_PATH, (_req, res) => {
       res.json(listing(master))
@@ -128,6 +136,11 @@ describe("the master's alarms on another server", () => {
       const alarm = master.get(req.params.id)
       if (!alarm) {
         res.sendStatus(404)
+        return
+      }
+      if (failPosts > 0) {
+        failPosts--
+        res.sendStatus(500)
         return
       }
       posted.push(`${req.params.id} ${req.params.action}`)
@@ -152,15 +165,20 @@ describe("the master's alarms on another server", () => {
     master.clear()
     posted.length = 0
     isMaster = false
+    masterId = 'salon'
+    masterUrl = url
+    failPosts = 0
+    accessGate = null
   })
 
   function make(name: string, notifications: Notifications): MasterAlarms {
     return new MasterAlarms({
-      master: () => (isMaster ? null : { id: 'salon', access: { url, token: 'pairing-token' } }),
+      master: () =>
+        isMaster ? null : { id: masterId, access: { url: masterUrl, token: 'pairing-token' } },
       control: new MasterControlAccess({
         store: new MultihelmStore(path.join(root, name)),
         serverId: 'port',
-        currentMaster: () => (isMaster ? null : 'salon'),
+        currentMaster: () => (isMaster ? null : masterId),
         debug: () => undefined
       }),
       notifications,
@@ -184,7 +202,7 @@ describe("the master's alarms on another server", () => {
     master.set('m1', alarm({ path: DEPTH, data: { depth: 1.2 } }))
     await alarms.sync()
     expect([...here.alarms.values()]).toEqual([
-      alarm({ path: DEPTH, data: { depth: 1.2, [FROM_MASTER]: 'salon' } })
+      alarm({ path: DEPTH, data: { depth: 1.2, [FROM_MASTER]: 'salon', [MASTER_ALARM]: 'm1' } })
     ])
 
     master.set('m1', alarm({ path: DEPTH, state: 'emergency', message: 'Aground' }))
@@ -221,7 +239,6 @@ describe("the master's alarms on another server", () => {
     const alarms = make('ack-here', here)
     master.set('m1', alarm({ path: DEPTH }))
     master.set('m2', alarm({ path: ENGINE }))
-    await alarms.sync()
     await alarms.sync()
     const [depth] = [...here.alarms].find(([, a]) => a.path === DEPTH) ?? []
     here.acknowledge(depth as NotificationId)
@@ -287,5 +304,68 @@ describe("the master's alarms on another server", () => {
     master.set('m1', alarm({ path: DEPTH, data: { [FROM_MASTER]: 'flybridge' } }))
     await make('stale-master', here).sync()
     expect(here.alarms.size).toBe(0)
+  })
+
+  it('sends an acknowledgement again that the master did not take', async () => {
+    const here = new Notifications()
+    const alarms = make('retry', here)
+    master.set('m1', alarm({ path: DEPTH }))
+    await alarms.sync()
+    const [id] = [...here.alarms.keys()]
+    here.acknowledge(id as NotificationId)
+    failPosts = 1
+    await alarms.sync()
+    expect(posted).toEqual([])
+    await alarms.sync()
+    expect(posted).toEqual(['m1 acknowledge'])
+    await alarms.sync()
+    expect(posted).toEqual(['m1 acknowledge'])
+  })
+
+  it('does not give an acknowledgement to the alarm the master raised in place of the one acknowledged', async () => {
+    const here = new Notifications()
+    const alarms = make('replaced', here)
+    master.set('m1', alarm({ path: DEPTH }))
+    await alarms.sync()
+    const [id] = [...here.alarms.keys()]
+    here.acknowledge(id as NotificationId)
+    master.delete('m1')
+    master.set('m3', alarm({ path: DEPTH }))
+    await alarms.sync()
+    await alarms.sync()
+    expect(posted).toEqual([])
+    expect([...here.alarms.values()]).toEqual([
+      alarm({ path: DEPTH, data: { [FROM_MASTER]: 'salon', [MASTER_ALARM]: 'm3' } })
+    ])
+  })
+
+  it('takes the old master’s alarms off while a new master does not answer', async () => {
+    const here = new Notifications()
+    const alarms = make('new-master', here)
+    master.set('m1', alarm({ path: DEPTH }))
+    await alarms.sync()
+    masterId = 'flybridge'
+    masterUrl = 'http://127.0.0.1:1'
+    await alarms.sync()
+    expect(here.alarms.size).toBe(0)
+  })
+
+  it('raises no alarm of the master once stopped during a pass', async () => {
+    const here = new Notifications()
+    const alarms = make('stop-mid-pass', here)
+    const own = here.raise({ path: ENGINE as never, state: 'alarm' as never, message: 'Hot' })
+    master.set('m2', alarm({ path: ENGINE }))
+    await alarms.sync()
+    here.acknowledge(own)
+    master.set('m1', alarm({ path: DEPTH }))
+    let open: () => void = () => undefined
+    accessGate = new Promise((resolve) => (open = resolve))
+    const asked = new Promise<void>((resolve) => (accessAsked = resolve))
+    const pass = alarms.sync()
+    await asked
+    alarms.stop()
+    open()
+    await pass
+    expect([...here.alarms.keys()]).toEqual([own])
   })
 })
