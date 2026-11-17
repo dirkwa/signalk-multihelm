@@ -124,8 +124,13 @@ export async function writeCourse(
  * other, as after a write from one to the other that stopped part way.
  */
 export function onTheWay(course: CourseSetting, from: CourseSetting, to: CourseSetting): boolean {
+  // Clearing the course clears its arrival time, which is set again after.
+  const clearing = !to.route && !to.point
   return (Object.keys(course) as (keyof CourseSetting)[]).every(
-    (key) => isDeepStrictEqual(course[key], from[key]) || isDeepStrictEqual(course[key], to[key])
+    (key) =>
+      isDeepStrictEqual(course[key], from[key]) ||
+      isDeepStrictEqual(course[key], to[key]) ||
+      (key === 'targetArrivalTime' && clearing && course[key] === null)
   )
 }
 

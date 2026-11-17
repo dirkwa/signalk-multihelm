@@ -275,6 +275,18 @@ describe('the course on a server that is not the master', () => {
     expect(here.accessRequests).toBe(2)
   })
 
+  it('sets the arrival time again when clearing reached the master but setting it did not', async () => {
+    const course = make('partial-clear')
+    master.course = { ...NONE, activeRoute: ROUTE, targetArrivalTime: '2026-11-17T06:00:00Z' }
+    await course.sync()
+    here.course = { ...NONE, targetArrivalTime: '2026-11-17T08:00:00Z' }
+    master.failNext = { request: 'PUT /targetArrivalTime', status: 500 }
+    await course.sync()
+    expect(courseSetting(master.course)?.route).toBeNull()
+    await course.sync()
+    expect(courseSetting(master.course)?.targetArrivalTime).toBe('2026-11-17T08:00:00Z')
+  })
+
   it('keeps a change made on the master while a partial change from here waits', async () => {
     const course = make('partial-then-master')
     await course.sync()
