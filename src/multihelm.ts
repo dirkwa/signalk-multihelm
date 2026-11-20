@@ -64,6 +64,12 @@ export const MASTER_CHECK_INTERVAL_MS = 30_000
  * recently, so a few missed answers do not move the role.
  */
 export const MASTER_STALE_MS = 5 * MASTER_CHECK_INTERVAL_MS
+/**
+ * A server takes over as master only once the one set to be it has been gone
+ * this long: by then a master cut off from the others has seen them go and
+ * stopped acting, so the two never act at once.
+ */
+export const TAKEOVER_MS = MASTER_STALE_MS + 2 * MASTER_CHECK_INTERVAL_MS
 /** Every peer asks every 30 s, so a sighting is saved only now and then. */
 const PAIRED_BY_SAVE_MS = 10 * 60_000
 /** Without security anyone may ask, so writes of that list are gathered, never one per request. */
@@ -79,6 +85,8 @@ export interface MultihelmHost {
   serverName: () => string
   /** The user set this server to be the boat's master. */
   isMaster: () => boolean
+  /** Its place among the servers that take over as master; 0: never. */
+  standby?: () => number
   /** What this server runs, for the peers to show. */
   versions?: () => { signalk?: string; multihelm?: string }
   debug: (msg: string) => void
@@ -196,7 +204,7 @@ export class Multihelm {
   /** What the status listeners were last told: role, master id and conflict. */
   private announcedStatus = ''
   private masterTimer: NodeJS.Timeout | null = null
-  private checkingMasters = false
+  private checkingMasters: Promise<void> | null = null
   private checkMastersAgain = false
   /** Whether the paired peers were asked once since the start, so the role is known. */
   private mastersChecked = false
@@ -264,58 +272,64 @@ export class Multihelm {
    * the work queue and touches nothing but what it keeps of the answers, so it neither waits
    * for a round nor races one.
    */
-  async checkMasters(): Promise<void> {
+  checkMasters(): Promise<void> {
     if (this.stopped) {
-      return
+      return Promise.resolve()
     }
     if (this.checkingMasters) {
+      // A caller waits for an answer asked for after it called.
       this.checkMastersAgain = true
-      return
+      return this.checkingMasters
     }
-    this.checkingMasters = true
-    try {
-      await Promise.all(
-        this.peers
-          .filter((p) => p.state === 'paired' && p.id !== '')
-          .map(async (peer) => {
-            const { url, ca } = peer
-            // Unpaired or stopped meanwhile, or paired again at another address or by another certificate.
-            const current = (): boolean =>
-              !this.stopped && this.peers.includes(peer) && peer.url === url && peer.ca === ca
-            let hello
-            try {
-              hello = await fetchHello(peer, peer.token, this.helloFrom())
-            } catch (error) {
-              if (current()) {
-                this.helloErrors.set(url, helloErrorText(error))
-              }
-              return // It counts until its last answer is stale.
-            }
-            // Or another server at that address now.
-            if (!current() || hello.serverId !== peer.id) {
-              return
-            }
-            this.answered(url, hello)
-            if (hello.master) {
-              this.masterSeen.set(url, Date.now())
-            } else {
-              this.masterSeen.delete(url)
-            }
-          })
-      )
-    } finally {
-      this.checkingMasters = false
-    }
-    // stop() may have run during the awaits above.
-    if (this.stopped as boolean) {
-      return
-    }
-    this.mastersChecked = true
-    this.announceRole()
-    if (this.checkMastersAgain) {
+    this.checkingMasters = this.checkMastersUntilDone().finally(() => {
+      this.checkingMasters = null
+    })
+    return this.checkingMasters
+  }
+
+  private async checkMastersUntilDone(): Promise<void> {
+    do {
       this.checkMastersAgain = false
-      await this.checkMasters()
-    }
+      await this.askForMasters()
+      // stop() may have run during the awaits.
+      if (this.stopped) {
+        return
+      }
+      this.mastersChecked = true
+      this.announceRole()
+    } while (this.checkMastersAgain as boolean)
+  }
+
+  private async askForMasters(): Promise<void> {
+    await Promise.all(
+      this.peers
+        .filter((p) => p.state === 'paired' && p.id !== '')
+        .map(async (peer) => {
+          const { url, ca } = peer
+          // Unpaired or stopped meanwhile, or paired again at another address or by another certificate.
+          const current = (): boolean =>
+            !this.stopped && this.peers.includes(peer) && peer.url === url && peer.ca === ca
+          let hello
+          try {
+            hello = await fetchHello(peer, peer.token, this.helloFrom())
+          } catch (error) {
+            if (current()) {
+              this.helloErrors.set(url, helloErrorText(error))
+            }
+            return // It counts until its last answer is stale.
+          }
+          // Or another server at that address now.
+          if (!current() || hello.serverId !== peer.id) {
+            return
+          }
+          this.answered(url, hello)
+          if (hello.master) {
+            this.masterSeen.set(url, Date.now())
+          } else {
+            this.masterSeen.delete(url)
+          }
+        })
+    )
   }
 
   /** Whether the role is known: the paired peers were asked since the start. */
@@ -446,18 +460,113 @@ export class Multihelm {
     return candidates.sort((x, y) => (x.id < y.id ? -1 : x.id > y.id ? 1 : 0))
   }
 
-  role(): Role {
-    return this.masterCandidates()[0]?.peer === null ? 'master' : 'member'
+  /** The paired peers that answered within `MASTER_STALE_MS`, with their answer. */
+  private seenPeers(now: number): { peer: Peer; hello: Hello }[] {
+    const seen: { peer: Peer; hello: Hello }[] = []
+    for (const peer of this.peers) {
+      const answer = this.answers.get(peer.url)
+      if (
+        peer.state === 'paired' &&
+        peer.id !== '' &&
+        answer?.hello.serverId === peer.id &&
+        now - answer.at <= MASTER_STALE_MS
+      ) {
+        seen.push({ peer, hello: answer.hello })
+      }
+    }
+    return seen
   }
 
+  /**
+   * Whether this server sees most of the boat's servers, itself included. A
+   * tie counts on the side of the server set to be the master, so two
+   * servers cut apart never both act as the master. Without a server that may
+   * take over, only the one set to be the master ever is, so it needs none.
+   */
+  hasMajority(): boolean {
+    if (!this.takeOverPossible()) {
+      return true
+    }
+    const now = Date.now()
+    const total = 1 + this.peers.filter((p) => p.state === 'paired' && p.id !== '').length
+    const seen = 1 + this.seenPeers(now).length
+    return 2 * seen > total || (2 * seen === total && this.masterCandidates().length > 0)
+  }
+
+  private takeOverPossible(): boolean {
+    return (
+      (this.host.standby?.() ?? 0) > 0 ||
+      this.peers.some(
+        (p) => p.state === 'paired' && (this.answers.get(p.url)?.hello.standby ?? 0) > 0
+      )
+    )
+  }
+
+  /** The server that should be the master, as this one sees the boat; null while there is none. */
+  private elected(): { id: string; peer: Peer | null } | null {
+    if (!this.hasMajority()) {
+      return null
+    }
+    const set = this.masterCandidates()[0]
+    if (set) {
+      return set
+    }
+    const now = Date.now()
+    const setRecently = [...this.masterSeen.values()].some((seen) => now - seen <= TAKEOVER_MS)
+    if (setRecently) {
+      return null
+    }
+    const standbys: { id: string; peer: Peer | null; order: number }[] = []
+    const own = this.host.standby?.() ?? 0
+    if (own > 0) {
+      standbys.push({ id: this.serverId, peer: null, order: own })
+    }
+    for (const { peer, hello } of this.seenPeers(now)) {
+      if (hello.standby !== undefined && hello.standby > 0) {
+        standbys.push({ id: peer.id, peer, order: hello.standby })
+      }
+    }
+    standbys.sort((x, y) => x.order - y.order || (x.id < y.id ? -1 : x.id > y.id ? 1 : 0))
+    return standbys[0] ?? null
+  }
+
+  private acts(hello: Hello): boolean {
+    return hello.acting ?? hello.master
+  }
+
+  /** A server becomes the master only once the one before has stopped acting as it. */
+  role(): Role {
+    const elected = this.elected()
+    if (elected?.peer !== null) {
+      return 'member'
+    }
+    return this.seenPeers(Date.now()).some(({ hello }) => this.acts(hello)) ? 'member' : 'master'
+  }
+
+  /** The master to follow, once it acts as the master; null when this server is it or there is none. */
   master(): PeerInfo | null {
-    const peer = this.masterCandidates()[0]?.peer
+    const peer = this.actingMaster()
     return peer ? this.infoOf(peer) : null
+  }
+
+  /** Another server should be the master: whatever runs on the master only stops here. */
+  masterElsewhere(): boolean {
+    const elected = this.elected()
+    return elected !== null && elected.peer !== null
+  }
+
+  private actingMaster(): Peer | null {
+    const peer = this.elected()?.peer
+    if (!peer) {
+      return null
+    }
+    const answer = this.answers.get(peer.url)
+    return answer && this.acts(answer.hello) ? peer : null
   }
 
   /** Where to reach the master, with the pairing token; null when this server is it or there is none. */
   masterAccess(): MasterAccess | null {
-    const peer = this.masterCandidates()[0]?.peer
+    const peer = this.actingMaster()
     if (!peer) {
       return null
     }
@@ -492,7 +601,12 @@ export class Multihelm {
     const now = `${role}:${master?.id ?? ''}`
     const status = `${now}:${String(this.masterConflict())}`
     if (now !== this.announcedRole) {
+      const wasActing = this.announcedRole.startsWith('master:')
       this.announcedRole = now
+      if (wasActing !== (role === 'master')) {
+        // The peers wait for this server to stop acting before one of them starts.
+        void this.checkMasters()
+      }
       for (const cb of this.roleListeners) {
         try {
           cb(role, master)
@@ -563,8 +677,14 @@ export class Multihelm {
       protocol: PROTOCOL,
       datasets: this.datasetIds(),
       master: this.host.isMaster(),
+      ...this.standing(),
       ...this.versions()
     }
+  }
+
+  private standing(): { standby?: number; acting: boolean } {
+    const standby = this.host.standby?.() ?? 0
+    return { ...(standby > 0 ? { standby } : {}), acting: this.role() === 'master' }
   }
 
   private versions(): { signalk?: string; multihelm?: string } {
@@ -577,6 +697,7 @@ export class Multihelm {
       serverId: this.serverId,
       name: this.host.serverName(),
       master: this.host.isMaster(),
+      acting: this.role() === 'master',
       ...this.versions()
     }
   }
@@ -620,7 +741,12 @@ export class Multihelm {
     }
     // A server that became or stopped being the master says so at once, so the role moves in seconds.
     const peer = this.peers.find((p) => p.state === 'paired' && p.id === from.serverId)
-    if (peer && from.master !== undefined && this.masterSeen.has(peer.url) !== from.master) {
+    const answer = peer && this.answers.get(peer.url)?.hello
+    if (
+      peer &&
+      ((from.master !== undefined && this.masterSeen.has(peer.url) !== from.master) ||
+        (from.acting !== undefined && (answer === undefined || this.acts(answer) !== from.acting)))
+    ) {
       void this.checkMasters()
     }
   }

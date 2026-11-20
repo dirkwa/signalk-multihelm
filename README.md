@@ -82,6 +82,26 @@ from the transfers, and a master that has not answered for two and a half
 minutes no longer counts.
 When several servers are set, the one with the smallest server id is the
 master, and the plugin status says to set one only.
+
+### When the master is gone
+
+Other servers can take over while the master is gone: give each one a place
+under **Take over as master when the master is gone** (first, second, ...).
+When no server set to be the master has answered for three and a half
+minutes, the reachable server with the lowest place becomes the master,
+with everything that follows the master: the plugins that run on the master
+only, the autopilot, the course, the alarms, the history and the charts it
+shows. When the master set by hand is back, it takes the role back.
+
+A server becomes the master only once the one before has stopped acting as
+it, so two never run the master's plugins at once. As soon as any server may
+take over, a server is the master only while it reaches most of the boat's
+paired servers, itself included; on a boat of two, the one set by hand
+counts as most. A server cut off from the others, the master included,
+stops the plugins that run on the master only, while the others carry on.
+A boat with only one of three servers switched on therefore has no master;
+leave **Never** on every server to keep the master set by hand alone. Pair
+every server with every other one, so they all count the same servers.
 A server that is set to be the master, or no longer is, says so when it
 next asks its peers, which it does right after the setting changes, so the
 role moves within seconds.
@@ -100,7 +120,8 @@ while another server is, through its own plugin settings, as the admin UI
 does: it shows them as disabled on the other servers, and they stay so
 across a restart. Their own settings are left as they are, so set them up
 on every server that may become the master. While no master is found,
-nothing is switched. While another server is the master, a plugin on the
+nothing is switched, unless this server reaches too few of the boat's
+servers (see _When the master is gone_): then it stops them. While another server is the master, a plugin on the
 list turned on by hand here is turned off again within a minute. Switching uses the same admin access as
 taking the vessel settings over (see below), on the master too.
 

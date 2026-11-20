@@ -29,6 +29,11 @@ export interface Status {
   role: Role | null
   master: PeerInfo | null
   masterConflict: boolean
+  /**
+   * This server reaches most of the boat's servers; without that none is the
+   * master, so two never act as it at once. Older versions leave it out.
+   */
+  majority?: boolean
   datasets: string[]
   /** The servers this one pairs with: it takes over what they share. */
   peers: PeerInfo[]

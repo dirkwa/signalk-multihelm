@@ -49,6 +49,10 @@ export interface Hello {
   datasets: string[]
   /** This server is set to be the boat's master. */
   master: boolean
+  /** Its place among the servers that take over as master while none set to be it is there; 0 or missing: never. */
+  standby?: number
+  /** It acts as the master now; older Multihelm versions leave it out, and act as the master while set to be it. */
+  acting?: boolean
   /** The Signal K server's version; older Multihelm versions leave it out. */
   signalk?: string
   /** Multihelm's version; older Multihelm versions leave it out. */
@@ -64,6 +68,8 @@ export interface HelloFrom {
   name: string
   /** It is set to be the boat's master; a peer that knew otherwise asks again at once. */
   master?: boolean
+  /** It acts as the master now; a peer that knew otherwise asks again at once. */
+  acting?: boolean
   signalk?: string
   multihelm?: string
 }
@@ -75,6 +81,9 @@ function helloQuery(from: HelloFrom | undefined): string {
   const query = new URLSearchParams({ from: from.serverId, name: from.name })
   if (from.master !== undefined) {
     query.set('master', from.master ? '1' : '0')
+  }
+  if (from.acting !== undefined) {
+    query.set('acting', from.acting ? '1' : '0')
   }
   if (from.signalk) {
     query.set('signalk', from.signalk)
@@ -324,8 +333,12 @@ export async function fetchHello(
   }
   const signalk = optionalText(body.signalk)
   const multihelm = optionalText(body.multihelm)
+  const standby = (body as { standby?: unknown }).standby
+  const acting = (body as { acting?: unknown }).acting
   return {
     ...hello,
+    ...(typeof standby === 'number' && Number.isInteger(standby) && standby > 0 ? { standby } : {}),
+    ...(typeof acting === 'boolean' ? { acting } : {}),
     ...(signalk ? { signalk } : {}),
     ...(multihelm ? { multihelm } : {})
   }
