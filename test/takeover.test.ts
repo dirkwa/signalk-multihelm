@@ -7,7 +7,7 @@ import path from 'node:path'
 import express from 'express'
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-import { MASTER_STALE_MS, Multihelm, TAKEOVER_MS } from '../src/multihelm.js'
+import { MASTER_STALE_MS, Multihelm, TAKEOVER_MS, VOTE_COUNT_MS } from '../src/multihelm.js'
 import { ROUTE_PREFIX, type Hello } from '../src/peer-client.js'
 import { registerRoutes } from '../src/routes.js'
 import { MultihelmStore } from '../src/store.js'
@@ -26,6 +26,8 @@ interface Station {
   legacy: boolean
   /** Plugins that run on the master only still run here. */
   pluginsRunning: boolean
+  /** Its answers to these server ids take this long, as on a slow link. */
+  stalls: Map<string, number>
   server: http.Server
 }
 
@@ -50,7 +52,8 @@ async function station(name: string, master: boolean, standby = 0): Promise<Stat
     down: false,
     refuses: new Set(),
     legacy: false,
-    pluginsRunning: false
+    pluginsRunning: false,
+    stalls: new Map()
   } as unknown as Station
   s.mh = multihelmOf(s, master, standby)
   app.use((req, res, next) => {
@@ -58,6 +61,10 @@ async function station(name: string, master: boolean, standby = 0): Promise<Stat
     if (s.down || s.refuses.has(from)) {
       res.sendStatus(503)
       return
+    }
+    const stall = s.stalls.get(from)
+    if (stall !== undefined && req.path.endsWith('/hello')) {
+      pass(stall)
     }
     if (s.legacy && req.path.endsWith('/hello')) {
       const old: Partial<Hello> = { ...s.mh.hello() }
@@ -337,6 +344,57 @@ describe('a takeover that must not happen twice', () => {
     }
     expect(cBecameMaster).toBe(true)
     expect(b.mh.role()).toBe('member')
+  })
+
+  it('counts a vote from when it asked for it, however long the answer took', async () => {
+    const b = await station('t12-b', false, 1)
+    const d = await station('t12-d', false)
+    const e = await station('t12-e', false)
+    await boat(b, d, e)
+    pass(TAKEOVER_MS + 1)
+    await check(b, d, e)
+    expect(b.mh.role()).toBe('master')
+
+    e.refuses.add(b.mh.serverId)
+    d.stalls.set(b.mh.serverId, VOTE_COUNT_MS - 10_000)
+    await b.mh.checkMasters()
+    expect(b.mh.role()).toBe('master')
+
+    d.refuses.add(b.mh.serverId)
+    pass(10_001)
+    expect(b.mh.role()).toBe('member')
+  })
+
+  it('counts its own vote only once it no longer holds it for another server', async () => {
+    const b = await station('t13-b', false, 1)
+    const c = await station('t13-c', false, 2)
+    const d = await station('t13-d', false)
+    await boat(b, c, d)
+    pass(TAKEOVER_MS + 1)
+    await check(b, c, d)
+    expect(b.mh.role()).toBe('master')
+
+    // C and D stop hearing B, and D answers no one; B still hears C, which voted for it, until C is cut off as well.
+    b.refuses.add(c.mh.serverId)
+    b.refuses.add(d.mh.serverId)
+    d.refuses.add(b.mh.serverId)
+    d.refuses.add(c.mh.serverId)
+    let cBecameMaster = false
+    for (let t = 0; t < 40; t++) {
+      if (t === 14) {
+        c.refuses.add(b.mh.serverId)
+      }
+      if (t === 15) {
+        d.refuses.delete(c.mh.serverId)
+      }
+      pass(10_000)
+      for (const s of [b, c, d]) {
+        await s.mh.checkMasters()
+      }
+      expect(b.mh.role() === 'master' && c.mh.role() === 'master').toBe(false)
+      cBecameMaster ||= c.mh.role() === 'master'
+    }
+    expect(cBecameMaster).toBe(true)
   })
 
   it('still acts until the plugins that run on the master only have stopped', async () => {

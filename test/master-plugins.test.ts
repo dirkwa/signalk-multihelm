@@ -5,7 +5,7 @@ import os from 'node:os'
 import path from 'node:path'
 
 import express from 'express'
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest'
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import {
   MASTER_PLUGINS_KEY,
@@ -145,6 +145,10 @@ describe('switching the plugins that run on the master only', () => {
     failing.clear()
   })
 
+  afterEach(() => {
+    vi.restoreAllMocks()
+  })
+
   function switcher(
     name: string,
     wanted: boolean | null | (() => boolean | null),
@@ -272,28 +276,52 @@ describe('switching the plugins that run on the master only', () => {
     expect(switcher('long-record', null, ['plugin-100'], undefined, file).runsHere()).toBe(true)
   })
 
+  const failWrites = (record: string): void => {
+    const write = fs.writeFileSync.bind(fs)
+    vi.spyOn(fs, 'writeFileSync').mockImplementation((file, ...rest) => {
+      if (String(file) === `${record}.tmp`) {
+        throw new Error('disk full')
+      }
+      write(file, ...rest)
+    })
+  }
+
   it('removes a record it could not write, so a restart does not trust it', async () => {
     const file = path.join(root, 'unwritable', 'running.json')
-    fs.mkdirSync(`${file}.tmp`, { recursive: true })
+    fs.mkdirSync(path.dirname(file), { recursive: true })
     fs.writeFileSync(file, '[]')
     plugins.set('autopilot', { enabled: true })
+    failWrites(file)
     await switcher('unwritable', null, ['autopilot'], undefined, file).applyOnce()
     expect(fs.existsSync(file)).toBe(false)
     expect(switcher('unwritable', null, ['autopilot'], undefined, file).runsHere()).toBe(true)
   })
 
   it('starts no plugin whose running it cannot keep', async () => {
-    const blocker = path.join(root, 'blocked')
-    fs.writeFileSync(blocker, 'a file where a folder should be')
+    const file = path.join(root, 'blocked', 'running.json')
+    fs.mkdirSync(path.dirname(file), { recursive: true })
+    fs.writeFileSync(file, '[]')
     plugins.set('autopilot', { enabled: false })
-    await switcher(
-      'blocked-start',
-      true,
-      ['autopilot'],
-      undefined,
-      path.join(blocker, 'x', 'running.json')
-    ).applyOnce()
+    failWrites(file)
+    const rm = fs.rmSync.bind(fs)
+    vi.spyOn(fs, 'rmSync').mockImplementation((target, options) => {
+      if (String(target) === file) {
+        throw new Error('read-only')
+      }
+      rm(target, options)
+    })
+    await switcher('blocked-start', true, ['autopilot'], undefined, file).applyOnce()
     expect(posts).toEqual([])
+  })
+
+  it('starts a plugin once the record it could not write is removed', async () => {
+    const file = path.join(root, 'removed', 'running.json')
+    fs.mkdirSync(path.dirname(file), { recursive: true })
+    fs.writeFileSync(file, '[]')
+    plugins.set('autopilot', { enabled: false })
+    failWrites(file)
+    await switcher('removed-start', true, ['autopilot'], undefined, file).applyOnce()
+    expect(posts).toHaveLength(1)
   })
 
   it('looks at the plugins while the role does not say, without switching them', async () => {
