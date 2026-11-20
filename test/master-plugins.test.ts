@@ -149,7 +149,8 @@ describe('switching the plugins that run on the master only', () => {
     name: string,
     wanted: boolean | null | (() => boolean | null),
     ids: string[] | (() => string[]),
-    runningChanged?: () => void
+    runningChanged?: () => void,
+    runningFile?: string
   ): MasterOnlyPlugins {
     const store = new MultihelmStore(path.join(root, name))
     const host: SwitchHost = {
@@ -164,6 +165,7 @@ describe('switching the plugins that run on the master only', () => {
       ownUrl: () => own.url,
       selfId: 'signalk-multihelm',
       ...(runningChanged ? { runningChanged } : {}),
+      ...(runningFile !== undefined ? { runningFile } : {}),
       debug: () => undefined,
       error: () => undefined
     }
@@ -231,6 +233,29 @@ describe('switching the plugins that run on the master only', () => {
     await plugins_.applyOnce()
     expect(plugins_.runsHere()).toBe(false)
     expect(changes).toBe(2)
+  })
+
+  it('counts plugins it saw running before a restart as running until it looks again', async () => {
+    const file = path.join(root, 'restart', 'running.json')
+    plugins.set('autopilot', { enabled: true })
+    const before = switcher('restart', true, ['autopilot'], undefined, file)
+    await before.applyOnce()
+    expect(before.runsHere()).toBe(true)
+
+    const after = switcher('restart', null, ['autopilot'], undefined, file)
+    expect(after.runsHere()).toBe(true)
+    plugins.set('autopilot', { enabled: false })
+    await after.applyOnce()
+    expect(after.runsHere()).toBe(false)
+    expect(posts).toEqual([])
+  })
+
+  it('looks at the plugins while the role does not say, without switching them', async () => {
+    plugins.set('autopilot', { enabled: true })
+    const unknown = switcher('looks', null, ['autopilot'])
+    await unknown.applyOnce()
+    expect(unknown.runsHere()).toBe(true)
+    expect(posts).toEqual([])
   })
 
   it('leaves alone a plugin taken off the list while it asked the server', async () => {
