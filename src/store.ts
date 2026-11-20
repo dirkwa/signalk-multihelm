@@ -32,6 +32,10 @@ export const PeerSchema = Type.Object({
   /** Per dataset, the peer's change sequence this server has applied up to. */
   cursors: Type.Record(Type.String(), Type.Integer({ minimum: 0 })),
   lastSeen: Type.Optional(Type.Number()),
+  /** Its place to take over as master, from its last `hello`; kept so a restart still knows. */
+  standby: Type.Optional(Type.Integer({ minimum: 1 })),
+  /** Its `hello` says whether it acts as the master, so it stops acting without most servers. */
+  quorum: Type.Optional(Type.Boolean()),
   lastSync: Type.Optional(Type.Number()),
   lastError: Type.Optional(Type.String())
 })

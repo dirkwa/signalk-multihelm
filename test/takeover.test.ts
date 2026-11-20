@@ -8,7 +8,7 @@ import express from 'express'
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { MASTER_STALE_MS, Multihelm, TAKEOVER_MS } from '../src/multihelm.js'
-import { ROUTE_PREFIX } from '../src/peer-client.js'
+import { ROUTE_PREFIX, type Hello } from '../src/peer-client.js'
 import { registerRoutes } from '../src/routes.js'
 import { MultihelmStore } from '../src/store.js'
 
@@ -20,24 +20,51 @@ interface Station {
   url: string
   /** While set, the station answers no one, as when its network is gone. */
   down: boolean
+  /** Server ids it does not answer, as when one link is gone. */
+  refuses: Set<string>
+  /** Answers as a Multihelm that does not say whether it acts. */
+  legacy: boolean
+  /** Plugins that run on the master only still run here. */
+  pluginsRunning: boolean
   server: http.Server
 }
 
 const stations: Station[] = []
 
-async function station(name: string, master: boolean, standby = 0): Promise<Station> {
-  const mh = new Multihelm(new MultihelmStore(path.join(root, name)), {
-    serverName: () => name,
+function multihelmOf(s: Station, master: boolean, standby: number): Multihelm {
+  return new Multihelm(new MultihelmStore(path.join(root, s.name)), {
+    serverName: () => s.name,
     isMaster: () => master,
     standby: () => standby,
+    stillRunning: () => s.pluginsRunning,
     debug: () => undefined,
     error: () => undefined
   })
+}
+
+async function station(name: string, master: boolean, standby = 0): Promise<Station> {
   const app = express()
-  const s = { name, mh, url: '', down: false } as Station
-  app.use((_req, res, next) => {
-    if (s.down) {
+  const s = {
+    name,
+    url: '',
+    down: false,
+    refuses: new Set(),
+    legacy: false,
+    pluginsRunning: false
+  } as unknown as Station
+  s.mh = multihelmOf(s, master, standby)
+  app.use((req, res, next) => {
+    const from = typeof req.query.from === 'string' ? req.query.from : ''
+    if (s.down || s.refuses.has(from)) {
       res.sendStatus(503)
+      return
+    }
+    if (s.legacy && req.path.endsWith('/hello')) {
+      const old: Partial<Hello> = { ...s.mh.hello() }
+      delete old.acting
+      delete old.elects
+      delete old.standby
+      res.json(old)
       return
     }
     next()
@@ -45,7 +72,7 @@ async function station(name: string, master: boolean, standby = 0): Promise<Stat
   const router = express.Router()
   registerRoutes(
     router,
-    () => mh,
+    () => s.mh,
     () => []
   )
   app.use(ROUTE_PREFIX, router)
@@ -195,6 +222,10 @@ describe('a server that takes over as master', () => {
     const port = await station('t5-port', false, 2)
     const stbd = await station('t5-stbd', false, 1)
     await boat(port, stbd)
+    expect(stbd.mh.role()).toBe('member')
+
+    pass(TAKEOVER_MS + 1)
+    await check(port, stbd)
     expect(stbd.mh.role()).toBe('master')
     expect(port.mh.master()?.name).toBe('t5-stbd')
   })
@@ -215,5 +246,84 @@ describe('a boat where no server may take over', () => {
     expect(salon.mh.hasMajority()).toBe(true)
     expect(salon.mh.role()).toBe('master')
     vi.useRealTimers()
+  })
+})
+
+describe('a takeover that must not happen twice', () => {
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    now = Date.now()
+  })
+
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  it('keeps the master set by hand from acting alone after a restart, as it knows a server may take over', async () => {
+    const salon = await station('t7-salon', true)
+    const port = await station('t7-port', false, 1)
+    const stbd = await station('t7-stbd', false)
+    await boat(salon, port, stbd)
+    port.down = true
+    stbd.down = true
+
+    salon.mh = multihelmOf(salon, true, 0)
+    await check(salon)
+    expect(salon.mh.hasMajority()).toBe(false)
+    expect(salon.mh.role()).toBe('member')
+  })
+
+  it('never takes over beside a server that does not say whether it acts', async () => {
+    const salon = await station('t8-salon', true)
+    const port = await station('t8-port', false, 1)
+    const stbd = await station('t8-stbd', false)
+    salon.legacy = true
+    await boat(salon, port, stbd)
+    salon.down = true
+    pass(TAKEOVER_MS + 1)
+    await check(port, stbd)
+    expect(port.mh.role()).toBe('member')
+  })
+
+  it('makes only one master when two that may take over share the servers between them', async () => {
+    const salon = await station('t9-salon', true)
+    const b = await station('t9-b', false, 1)
+    const c = await station('t9-c', false, 2)
+    const d = await station('t9-d', false)
+    const e = await station('t9-e', false)
+    await boat(salon, b, c, d, e)
+    salon.down = true
+    b.refuses.add(c.mh.serverId)
+    c.refuses.add(b.mh.serverId)
+    pass(TAKEOVER_MS + 1)
+    for (let i = 0; i < 3; i++) {
+      await check(b, c, d, e)
+    }
+    expect(b.mh.role()).toBe('master')
+    expect(c.mh.role()).toBe('member')
+  })
+
+  it('still acts until the plugins that run on the master only have stopped', async () => {
+    const salon = await station('t10-salon', true)
+    const port = await station('t10-port', false, 1)
+    const stbd = await station('t10-stbd', false)
+    await boat(salon, port, stbd)
+    salon.down = true
+    pass(TAKEOVER_MS + 1)
+    await check(port, stbd)
+    expect(port.mh.role()).toBe('master')
+    port.pluginsRunning = true
+
+    salon.down = false
+    await check(salon, port, stbd)
+    expect(port.mh.role()).toBe('member')
+    expect(salon.mh.role()).toBe('member')
+
+    port.pluginsRunning = false
+    port.mh.actingChanged()
+    await vi.waitFor(async () => {
+      await salon.mh.checkMasters()
+      expect(salon.mh.role()).toBe('master')
+    })
   })
 })

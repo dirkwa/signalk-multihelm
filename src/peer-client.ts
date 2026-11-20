@@ -53,6 +53,8 @@ export interface Hello {
   standby?: number
   /** It acts as the master now; older Multihelm versions leave it out, and act as the master while set to be it. */
   acting?: boolean
+  /** The server it would make the master by taking over; its vote, so two never take over at once. */
+  elects?: string
   /** The Signal K server's version; older Multihelm versions leave it out. */
   signalk?: string
   /** Multihelm's version; older Multihelm versions leave it out. */
@@ -335,10 +337,12 @@ export async function fetchHello(
   const multihelm = optionalText(body.multihelm)
   const standby = (body as { standby?: unknown }).standby
   const acting = (body as { acting?: unknown }).acting
+  const elects = (body as { elects?: unknown }).elects
   return {
     ...hello,
     ...(typeof standby === 'number' && Number.isInteger(standby) && standby > 0 ? { standby } : {}),
     ...(typeof acting === 'boolean' ? { acting } : {}),
+    ...(typeof elects === 'string' && elects !== '' ? { elects } : {}),
     ...(signalk ? { signalk } : {}),
     ...(multihelm ? { multihelm } : {})
   }

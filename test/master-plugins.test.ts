@@ -96,6 +96,7 @@ describe('switching the plugins that run on the master only', () => {
   const plugins = new Map<string, PluginState>()
   const posts: { id: string; body: unknown }[] = []
   let security = false
+  const failing = new Set<string>()
   let own: { server: http.Server; url: string }
 
   beforeAll(async () => {
@@ -120,6 +121,10 @@ describe('switching the plugins that run on the master only', () => {
       res.json(plugins.get(req.params.id) ?? {})
     })
     app.post('/plugins/:id/config', (req, res) => {
+      if (failing.has(req.params.id)) {
+        res.sendStatus(500)
+        return
+      }
       posts.push({ id: req.params.id, body: req.body as unknown })
       plugins.set(req.params.id, req.body as PluginState)
       res.json('saved')
@@ -138,12 +143,14 @@ describe('switching the plugins that run on the master only', () => {
     plugins.clear()
     posts.length = 0
     security = false
+    failing.clear()
   })
 
   function switcher(
     name: string,
     wanted: boolean | null | (() => boolean | null),
-    ids: string[] | (() => string[])
+    ids: string[] | (() => string[]),
+    runningChanged?: () => void
   ): MasterOnlyPlugins {
     const store = new MultihelmStore(path.join(root, name))
     const host: SwitchHost = {
@@ -157,6 +164,7 @@ describe('switching the plugins that run on the master only', () => {
       }),
       ownUrl: () => own.url,
       selfId: 'signalk-multihelm',
+      ...(runningChanged ? { runningChanged } : {}),
       debug: () => undefined,
       error: () => undefined
     }
@@ -226,6 +234,22 @@ describe('switching the plugins that run on the master only', () => {
     // Known when the pass starts, gone by the time it would write.
     await switcher('moved', () => (asked++ === 0 ? false : null), ['autopilot']).applyOnce()
     expect(posts).toEqual([])
+  })
+
+  it('says they still run here until a stop went through', async () => {
+    plugins.set('autopilot', { enabled: true })
+    failing.add('autopilot')
+    let changes = 0
+    const plugins_ = switcher('failing', false, ['autopilot'], () => {
+      changes++
+    })
+    await plugins_.applyOnce()
+    expect(plugins_.runsHere()).toBe(true)
+
+    failing.clear()
+    await plugins_.applyOnce()
+    expect(plugins_.runsHere()).toBe(false)
+    expect(changes).toBe(2)
   })
 
   it('leaves alone a plugin taken off the list while it asked the server', async () => {
