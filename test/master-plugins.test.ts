@@ -250,6 +250,52 @@ describe('switching the plugins that run on the master only', () => {
     expect(posts).toEqual([])
   })
 
+  it('counts a listed plugin as running until it looks, when the record is missing or unreadable', async () => {
+    plugins.set('autopilot', { enabled: false })
+    const missing = path.join(root, 'no-record', 'running.json')
+    const fresh = switcher('no-record', null, ['autopilot'], undefined, missing)
+    expect(fresh.runsHere()).toBe(true)
+    await fresh.applyOnce()
+    expect(fresh.runsHere()).toBe(false)
+
+    const broken = path.join(root, 'broken-record', 'running.json')
+    fs.mkdirSync(path.dirname(broken), { recursive: true })
+    fs.writeFileSync(broken, '{not json')
+    expect(switcher('broken-record', null, ['autopilot'], undefined, broken).runsHere()).toBe(true)
+  })
+
+  it('keeps a record of more plugins than the list may hold', () => {
+    const file = path.join(root, 'long-record', 'running.json')
+    fs.mkdirSync(path.dirname(file), { recursive: true })
+    const ids = Array.from({ length: 101 }, (_, i) => `plugin-${String(i)}`)
+    fs.writeFileSync(file, JSON.stringify(ids))
+    expect(switcher('long-record', null, ['plugin-100'], undefined, file).runsHere()).toBe(true)
+  })
+
+  it('removes a record it could not write, so a restart does not trust it', async () => {
+    const file = path.join(root, 'unwritable', 'running.json')
+    fs.mkdirSync(`${file}.tmp`, { recursive: true })
+    fs.writeFileSync(file, '[]')
+    plugins.set('autopilot', { enabled: true })
+    await switcher('unwritable', null, ['autopilot'], undefined, file).applyOnce()
+    expect(fs.existsSync(file)).toBe(false)
+    expect(switcher('unwritable', null, ['autopilot'], undefined, file).runsHere()).toBe(true)
+  })
+
+  it('starts no plugin whose running it cannot keep', async () => {
+    const blocker = path.join(root, 'blocked')
+    fs.writeFileSync(blocker, 'a file where a folder should be')
+    plugins.set('autopilot', { enabled: false })
+    await switcher(
+      'blocked-start',
+      true,
+      ['autopilot'],
+      undefined,
+      path.join(blocker, 'x', 'running.json')
+    ).applyOnce()
+    expect(posts).toEqual([])
+  })
+
   it('looks at the plugins while the role does not say, without switching them', async () => {
     plugins.set('autopilot', { enabled: true })
     const unknown = switcher('looks', null, ['autopilot'])

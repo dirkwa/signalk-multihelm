@@ -175,34 +175,57 @@ export class MasterOnlyPlugins {
   private busy = false
   private again = false
   /** Listed plugins this server found running or started, until it saw them stopped. */
-  private readonly running: Set<string>
+  private readonly running = new Set<string>()
+  /** Without a usable record from before, a plugin not looked at since the start may run. */
+  private readonly unknown: boolean
+  private readonly looked = new Set<string>()
 
   constructor(private readonly host: SwitchHost) {
-    this.running = new Set(this.loadRunning())
+    const kept = this.loadRunning()
+    this.unknown = kept === null
+    for (const id of kept ?? []) {
+      this.running.add(id)
+    }
   }
 
-  private loadRunning(): string[] {
+  /** null: no usable record, so what runs here is unknown. */
+  private loadRunning(): string[] | null {
     if (this.host.runningFile === undefined) {
       return []
     }
     try {
-      return parsePluginIds(JSON.parse(fs.readFileSync(this.host.runningFile, 'utf-8'))) ?? []
+      const kept: unknown = JSON.parse(fs.readFileSync(this.host.runningFile, 'utf-8'))
+      return Array.isArray(kept) && kept.every((id) => typeof id === 'string' && PLUGIN_ID.test(id))
+        ? (kept as string[])
+        : null
     } catch {
-      return []
+      return null
     }
   }
 
-  private saveRunning(): void {
+  /**
+   * Whether the record is safe to rely on after a restart: written, or
+   * removed when it could not be, so the next start treats it as unknown.
+   */
+  private saveRunning(): boolean {
     const file = this.host.runningFile
     if (file === undefined) {
-      return
+      return true
     }
     try {
       fs.mkdirSync(path.dirname(file), { recursive: true })
       fs.writeFileSync(`${file}.tmp`, JSON.stringify([...this.running]))
       fs.renameSync(`${file}.tmp`, file)
+      return true
     } catch (error) {
       this.host.error(`Multihelm: cannot keep which plugins run here: ${errorText(error)}`)
+    }
+    try {
+      fs.rmSync(file, { force: true })
+      return true
+    } catch (error) {
+      this.host.error(`Multihelm: cannot remove ${file}: ${errorText(error)}`)
+      return false
     }
   }
 
@@ -212,23 +235,30 @@ export class MasterOnlyPlugins {
    * must never run them at once.
    */
   runsHere(): boolean {
-    return [...this.running].some((id) => this.host.ids().includes(id))
+    return this.host
+      .ids()
+      .some(
+        (id) =>
+          id !== this.host.selfId &&
+          (this.running.has(id) || (this.unknown && !this.looked.has(id)))
+      )
   }
 
-  private mark(id: string, running: boolean): void {
-    if (this.running.has(id) === running) {
-      return
-    }
+  /** Returns whether the record could be kept; a plugin is started only then. */
+  private mark(id: string, running: boolean): boolean {
     const before = this.runsHere()
+    const changed = this.running.has(id) !== running || !this.looked.has(id)
+    this.looked.add(id)
     if (running) {
       this.running.add(id)
     } else {
       this.running.delete(id)
     }
-    this.saveRunning()
+    const kept = changed ? this.saveRunning() : true
     if (before !== this.runsHere()) {
       this.host.runningChanged?.()
     }
+    return kept
   }
 
   apply(): void {
@@ -284,8 +314,9 @@ export class MasterOnlyPlugins {
           typeof options === 'object' && options !== null && !Array.isArray(options)
             ? { ...options, enabled: wanted }
             : { enabled: wanted }
-        if (wanted) {
-          this.mark(id, true)
+        if (wanted && !this.mark(id, true)) {
+          this.host.error(`Multihelm: not starting ${id}: cannot keep that it runs here`)
+          continue
         }
         await callServer('POST', pluginUrl(base, id, '/config'), token, body)
         this.mark(id, wanted)
