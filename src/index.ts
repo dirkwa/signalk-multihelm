@@ -55,6 +55,7 @@ function multihelmVersion(): string | undefined {
 
 type Config = {
   master?: unknown
+  takeOver?: unknown
   syncResources?: unknown
   followVessel?: unknown
   followMetadata?: unknown
@@ -71,14 +72,24 @@ const APPROVE_HINT =
 const DENIED_HINT =
   'the access request on this server was denied, so the vessel settings are not taken over and no plugin is switched for the master; restart the plugin to ask again'
 
-function statusText(role: Role, master: PeerInfo | null, conflict: boolean): string {
+function statusText(
+  role: Role,
+  master: PeerInfo | null,
+  conflict: boolean,
+  majority: boolean
+): string {
   if (conflict) {
     return `${role === 'master' ? 'Master' : `Member, master: ${master?.name ?? '?'}`}. More than one server is set to be the master: set one only`
   }
   if (role === 'master') {
     return "Master of the boat's servers"
   }
-  return master ? `Member, master: ${master.name}` : 'Member, no master found'
+  if (master) {
+    return `Member, master: ${master.name}`
+  }
+  return majority
+    ? 'Member, no master found'
+    : "Member, no master: too few of the boat's servers are reachable"
 }
 
 /** The parts of the server the typed API leaves out. */
@@ -233,10 +244,15 @@ export default function (app: ServerAPI): Plugin {
       // Schema defaults are not applied at runtime: a never configured plugin gets {}.
       const settings = config as Config
       const isMaster = settings.master === true
+      const standby =
+        typeof settings.takeOver === 'number' && Number.isInteger(settings.takeOver)
+          ? Math.max(0, settings.takeOver)
+          : 0
       const store = new MultihelmStore(app.getDataDirPath())
       const mh = new Multihelm(store, {
         serverName: () => os.hostname(),
         isMaster: () => isMaster,
+        standby: () => standby,
         versions: () => ({ signalk: host.config?.version, multihelm: multihelmVersion() }),
         debug: (msg) => {
           app.debug(msg)
@@ -276,9 +292,16 @@ export default function (app: ServerAPI): Plugin {
       ownAccess = access
       const masterPlugins = new MasterOnlyPlugins({
         ids: () => pluginList.ids(),
-        // Nothing is switched before the role is known, nor on a server with no master to defer to.
+        // Nothing is switched before the role is known, nor on a server with no master to defer to,
+        // unless it reaches too few of the boat's servers to know there is none elsewhere.
         wanted: () =>
-          !mh.roleKnown() ? null : mh.role() === 'master' ? true : mh.master() ? false : null,
+          !mh.roleKnown()
+            ? null
+            : mh.role() === 'master'
+              ? true
+              : mh.masterElsewhere() || !mh.hasMajority()
+                ? false
+                : null,
         access,
         ownUrl,
         selfId: PLUGIN_ID,
@@ -321,7 +344,7 @@ export default function (app: ServerAPI): Plugin {
         }
       })
       const showRole = (): void => {
-        const text = statusText(mh.role(), mh.master(), mh.masterConflict())
+        const text = statusText(mh.role(), mh.master(), mh.masterConflict(), mh.hasMajority())
         if (access.waitingForApproval()) {
           app.setPluginStatus(`${text}; ${APPROVE_HINT}`)
         } else if (access.denied()) {

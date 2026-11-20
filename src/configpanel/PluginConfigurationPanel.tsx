@@ -38,6 +38,10 @@ function errorText(error: unknown): string {
 function withDefaults(configuration: Settings | undefined): Required<Settings> {
   return {
     master: configuration?.master === true,
+    takeOver:
+      typeof configuration?.takeOver === 'number' && configuration.takeOver > 0
+        ? configuration.takeOver
+        : 0,
     syncResources: configuration?.syncResources !== false,
     followVessel: configuration?.followVessel !== false,
     followMetadata: configuration?.followMetadata !== false,
@@ -615,12 +619,14 @@ function MasterPluginsCard({ status, onSaved }: { status: Status; onSaved: () =>
   )
 }
 
+type Switch = Exclude<keyof Settings, 'takeOver'>
+
 function SettingsCard({ configuration, save }: Props) {
   const [settings, setSettings] = useState(() => withDefaults(configuration))
-  const set = (key: keyof Settings, value: boolean): void => {
+  const set = (key: Switch, value: boolean): void => {
     setSettings((s) => ({ ...s, [key]: value }))
   }
-  const option = (key: keyof Settings, title: string, help: string, disabled = false) => (
+  const option = (key: Switch, title: string, help: string, disabled = false) => (
     <div className="form-check mb-3">
       <input
         className="form-check-input"
@@ -648,6 +654,32 @@ function SettingsCard({ configuration, save }: Props) {
           "This server is the boat's master",
           'Set this on one server only. Plugins that run on the master alone run here, and the other servers use them through this one.'
         )}
+        <div className="mb-3">
+          <label className="form-label" htmlFor="multihelm-takeOver">
+            Take over as master when the master is gone
+          </label>
+          <select
+            className="form-select w-auto"
+            id="multihelm-takeOver"
+            value={settings.takeOver}
+            disabled={onMaster}
+            onChange={(e) => {
+              setSettings((s) => ({ ...s, takeOver: Number(e.target.value) }))
+            }}
+          >
+            <option value={0}>Never</option>
+            {[1, 2, 3, 4, 5, 6, 7, 8, 9].map((n) => (
+              <option key={n} value={n}>
+                {n === 1 ? 'First' : `${String(n)}.`}
+              </option>
+            ))}
+          </select>
+          <div className="form-text">
+            When the server set to be the master has been gone for three and a half minutes, the
+            server with the lowest place here takes over, while it reaches most of the boat&apos;s
+            servers. Give each server that may take over a place of its own.
+          </div>
+        </div>
         {option(
           'syncResources',
           'Keep routes and waypoints in step',

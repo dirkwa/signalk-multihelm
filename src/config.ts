@@ -7,6 +7,14 @@ export const ConfigSchema = Type.Object({
       'Set this on one server only. Plugins that run on the master alone run here, and the other servers use them through this one.',
     default: false
   }),
+  takeOver: Type.Integer({
+    title: 'Take over as master when the master is gone (order, 0 = never)',
+    description:
+      "While no server set to be the master has been reachable for three and a half minutes, the server with the lowest number here takes over, as long as it reaches most of the boat's servers. Give the servers that may take over different numbers.",
+    minimum: 0,
+    maximum: 9,
+    default: 0
+  }),
   syncResources: Type.Boolean({
     title: 'Keep routes and waypoints in step',
     description:

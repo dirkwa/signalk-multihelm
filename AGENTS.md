@@ -92,7 +92,12 @@ sets by hand on one server (see `README.md`).
   which older peers ignore.
 - **The master** is the server set to be it with the smallest server id,
   among this one and the paired peers whose `hello` said `master: true`
-  within `MASTER_STALE_MS`. Every server must reach the same answer.
+  within `MASTER_STALE_MS`. While none has said so within `TAKEOVER_MS`,
+  it is the server with the lowest `standby` place. Once any server may take
+  over, a server counts a master only while it sees most of the paired
+  servers (a tie goes to the side with the one set by hand), and it acts as
+  the master only once no peer's `hello` says `acting` (older peers: `master`).
+  Every server must reach the same answer.
 - **A file is served only if its dataset lists it**, and only while it still
   has the size and time that were hashed.
 - **`master/*` forwards only** GET, only to the paired master, only under a

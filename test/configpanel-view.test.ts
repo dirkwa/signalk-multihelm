@@ -57,6 +57,13 @@ describe('the configuration panel', () => {
     expect(roleNotice(status({ running: false }), now).tone).toBe('danger')
   })
 
+  it('says the plugins for the master stop here while too few servers are reachable', () => {
+    const away = { ...helm, name: 'salon', online: false }
+    const notice = roleNotice(status({ peers: [away], majority: false }), now)
+    expect(notice.tone).toBe('danger')
+    expect(notice.text).toMatch(/too few .*salon is not reachable.*stopped here/)
+  })
+
   it('says which paired servers cannot be reached while no master is found', () => {
     const away = { ...helm, name: 'nav', url: 'http://192.0.2.11', online: false }
     expect(roleNotice(status({ peers: [helm, away] }), now)).toEqual({
