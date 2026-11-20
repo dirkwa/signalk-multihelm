@@ -167,6 +167,11 @@ export interface SwitchHost {
   selfId: string
   /** `runsHere()` changed. */
   runningChanged?: () => void
+  /**
+   * Where the plugins seen running here are kept, so after a restart those
+   * not looked at again yet still count as running.
+   */
+  runningFile?: string
   debug: (msg: string) => void
   error: (msg: string) => void
 }
@@ -195,9 +200,36 @@ export class MasterOnlyPlugins {
   private busy = false
   private again = false
   /** Listed plugins this server found running or started, until it saw them stopped. */
-  private readonly running = new Set<string>()
+  private readonly running: Set<string>
 
-  constructor(private readonly host: SwitchHost) {}
+  constructor(private readonly host: SwitchHost) {
+    this.running = new Set(this.loadRunning())
+  }
+
+  private loadRunning(): string[] {
+    if (this.host.runningFile === undefined) {
+      return []
+    }
+    try {
+      return parsePluginIds(JSON.parse(fs.readFileSync(this.host.runningFile, 'utf-8'))) ?? []
+    } catch {
+      return []
+    }
+  }
+
+  private saveRunning(): void {
+    const file = this.host.runningFile
+    if (file === undefined) {
+      return
+    }
+    try {
+      fs.mkdirSync(path.dirname(file), { recursive: true })
+      fs.writeFileSync(`${file}.tmp`, JSON.stringify([...this.running]))
+      fs.renameSync(`${file}.tmp`, file)
+    } catch (error) {
+      this.host.error(`Multihelm: cannot keep which plugins run here: ${errorText(error)}`)
+    }
+  }
 
   /**
    * Whether a plugin that runs on the master only may still run here. A stop
@@ -209,12 +241,16 @@ export class MasterOnlyPlugins {
   }
 
   private mark(id: string, running: boolean): void {
+    if (this.running.has(id) === running) {
+      return
+    }
     const before = this.runsHere()
     if (running) {
       this.running.add(id)
     } else {
       this.running.delete(id)
     }
+    this.saveRunning()
     if (before !== this.runsHere()) {
       this.host.runningChanged?.()
     }
@@ -244,7 +280,7 @@ export class MasterOnlyPlugins {
   async applyOnce(): Promise<void> {
     const wanted = this.host.wanted()
     const ids = this.host.ids().filter((id) => id !== this.host.selfId)
-    if (wanted === null || ids.length === 0) {
+    if (ids.length === 0) {
       return
     }
     const token = await this.host.access.token()
@@ -257,7 +293,8 @@ export class MasterOnlyPlugins {
         const state = await callServer('GET', pluginUrl(base, id), token)
         const enabled = (state as { enabled?: unknown } | null)?.enabled === true
         this.mark(id, enabled)
-        if (enabled === wanted) {
+        // Looked at even while the role does not say, so `runsHere()` is never a guess.
+        if (wanted === null || enabled === wanted) {
           continue
         }
         const roleMoved = await exclusivePluginConfig(id, async () => {

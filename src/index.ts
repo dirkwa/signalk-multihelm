@@ -313,6 +313,7 @@ export default function (app: ServerAPI): Plugin {
         runningChanged: () => {
           mh.actingChanged()
         },
+        runningFile: path.join(app.getDataDirPath(), 'master-plugins-running.json'),
         debug: (msg) => {
           app.debug(msg)
         },
