@@ -303,6 +303,42 @@ describe('a takeover that must not happen twice', () => {
     expect(c.mh.role()).toBe('member')
   })
 
+  it('never makes two masters while the servers between them change their vote', async () => {
+    const salon = await station('t11-salon', true)
+    const b = await station('t11-b', false, 1)
+    const c = await station('t11-c', false, 2)
+    const d = await station('t11-d', false)
+    const e = await station('t11-e', false)
+    await boat(salon, b, c, d, e)
+    salon.down = true
+    b.refuses.add(c.mh.serverId)
+    c.refuses.add(b.mh.serverId)
+    pass(TAKEOVER_MS + 1)
+    for (let i = 0; i < 3; i++) {
+      await check(b, c, d, e)
+    }
+    expect(b.mh.role()).toBe('master')
+
+    // D and E stop reaching B first, while B still gets their votes; then B loses them too.
+    for (const s of [d, e]) {
+      b.refuses.add(s.mh.serverId)
+    }
+    let cBecameMaster = false
+    for (let t = 0; t < 24; t++) {
+      if (t === 7) {
+        for (const s of [d, e]) {
+          s.refuses.add(b.mh.serverId)
+        }
+      }
+      pass(15_000)
+      await check(b, c, d, e)
+      expect(b.mh.role() === 'master' && c.mh.role() === 'master').toBe(false)
+      cBecameMaster ||= c.mh.role() === 'master'
+    }
+    expect(cBecameMaster).toBe(true)
+    expect(b.mh.role()).toBe('member')
+  })
+
   it('still acts until the plugins that run on the master only have stopped', async () => {
     const salon = await station('t10-salon', true)
     const port = await station('t10-port', false, 1)

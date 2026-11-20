@@ -37,6 +37,7 @@ import {
 import type { MasterAccess } from './master-proxy.js'
 import {
   PeerHttpError,
+  REQUEST_TIMEOUT_MS,
   UNTRUSTED_ISSUER,
   downloadFile,
   fetchHello,
@@ -70,6 +71,16 @@ export const MASTER_STALE_MS = 5 * MASTER_CHECK_INTERVAL_MS
  * stopped acting, so the two never act at once.
  */
 export const TAKEOVER_MS = MASTER_STALE_MS + 2 * MASTER_CHECK_INTERVAL_MS
+
+/** How long a server taking over counts a peer's vote after it got it. */
+export const VOTE_COUNT_MS = 2 * MASTER_CHECK_INTERVAL_MS
+
+/**
+ * How long a server keeps its vote after it last gave it: it votes for no
+ * other server meanwhile, so no candidate still counts a vote that another
+ * already got. Longer than counting by the most a reply can take.
+ */
+export const VOTE_HOLD_MS = VOTE_COUNT_MS + REQUEST_TIMEOUT_MS
 /** Every peer asks every 30 s, so a sighting is saved only now and then. */
 const PAIRED_BY_SAVE_MS = 10 * 60_000
 /** Without security anyone may ask, so writes of that list are gathered, never one per request. */
@@ -215,6 +226,7 @@ export class Multihelm {
   readonly serverId: string
   /** No server takes over before `TAKEOVER_MS` without a master answer, counted from here too. */
   private startedAt = Date.now()
+  private vote: { for: string; at: number } | null = null
 
   constructor(
     private readonly store: MultihelmStore,
@@ -541,10 +553,34 @@ export class Multihelm {
 
   /** Each server votes for one, so two sides that share servers never both have most votes. */
   private hasMostVotes(): boolean {
+    const now = Date.now()
     const total = 1 + this.pairedPeers().length
-    const votes =
-      1 + this.seenPeers(Date.now()).filter(({ hello }) => hello.elects === this.serverId).length
+    let votes = 1
+    for (const peer of this.pairedPeers()) {
+      const answer = this.answers.get(peer.url)
+      if (
+        answer?.hello.serverId === peer.id &&
+        answer.hello.elects === this.serverId &&
+        now - answer.at <= VOTE_COUNT_MS
+      ) {
+        votes++
+      }
+    }
     return 2 * votes > total
+  }
+
+  /** The vote this server gives now: none while it still holds one for another server. */
+  private castVote(): string | undefined {
+    const now = Date.now()
+    const choice = this.elected()?.id
+    if (choice === undefined) {
+      return undefined
+    }
+    if (this.vote === null || this.vote.for === choice || now - this.vote.at > VOTE_HOLD_MS) {
+      this.vote = { for: choice, at: now }
+      return choice
+    }
+    return undefined
   }
 
   private acts(hello: Hello): boolean {
@@ -704,7 +740,7 @@ export class Multihelm {
 
   private standing(): { standby?: number; acting: boolean } {
     const standby = this.host.standby?.() ?? 0
-    const elects = this.elected()?.id
+    const elects = this.castVote()
     return {
       ...(standby > 0 ? { standby } : {}),
       acting: this.acting(),

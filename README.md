@@ -97,9 +97,12 @@ shows. When the master set by hand is back, it takes the role back.
 A server becomes the master only once the one before has stopped acting as
 it, so two never run the master's plugins at once; a server acts until its
 plugins that run on the master only have stopped, and keeps trying a stop
-that failed. A server taking over also needs the votes of most servers:
-each server votes for the one it would make the master, so two that share
-the reachable servers never both take over. No server takes over while a
+that failed. A server that has not looked at those plugins since its start,
+and has no record of them, counts as acting until it has, so approve its
+own access request. A server taking over also needs the votes of most
+servers: each server votes for one server at a time and keeps that vote for
+a while after it last gave it, so two that share the reachable servers never
+both take over. No server takes over while a
 paired server runs a Multihelm too old to say whether it acts. As soon as any server may
 take over, a server is the master only while it reaches most of the boat's
 paired servers, itself included; on a boat of two, the one set by hand
