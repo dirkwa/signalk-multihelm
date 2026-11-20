@@ -17,7 +17,7 @@ import { pipeline } from 'node:stream/promises'
 import tls from 'node:tls'
 
 export const ROUTE_PREFIX = '/plugins/signalk-multihelm'
-export const REQUEST_TIMEOUT_MS = 30_000
+const REQUEST_TIMEOUT_MS = 30_000
 
 /**
  * What Node calls a chain whose issuer it does not trust, the one failure a

@@ -37,7 +37,6 @@ import {
 import type { MasterAccess } from './master-proxy.js'
 import {
   PeerHttpError,
-  REQUEST_TIMEOUT_MS,
   UNTRUSTED_ISSUER,
   downloadFile,
   fetchHello,
@@ -78,9 +77,11 @@ export const VOTE_COUNT_MS = 2 * MASTER_CHECK_INTERVAL_MS
 /**
  * How long a server keeps its vote after it last gave it: it votes for no
  * other server meanwhile, so no candidate still counts a vote that another
- * already got. Longer than counting by the most a reply can take.
+ * already got. Counting runs from when the candidate asked, before the vote
+ * was given however long the reply took; the rest is margin for clocks that
+ * run at slightly different rates.
  */
-export const VOTE_HOLD_MS = VOTE_COUNT_MS + REQUEST_TIMEOUT_MS
+export const VOTE_HOLD_MS = VOTE_COUNT_MS + MASTER_CHECK_INTERVAL_MS
 /** Every peer asks every 30 s, so a sighting is saved only now and then. */
 const PAIRED_BY_SAVE_MS = 10 * 60_000
 /** Without security anyone may ask, so writes of that list are gathered, never one per request. */
@@ -203,7 +204,8 @@ export class Multihelm {
   /** Peer URL → when it last answered as set to be the master. */
   private readonly masterSeen = new Map<string, number>()
   /** Peer URL → its last `hello`, and when. */
-  private readonly answers = new Map<string, { at: number; hello: Hello }>()
+  /** `asked`: when the request for the answer went out. */
+  private readonly answers = new Map<string, { at: number; asked: number; hello: Hello }>()
   /** Peer URL → why its last `hello` failed. */
   private readonly helloErrors = new Map<string, string>()
   /** Server id → a server that asks this one for its `hello`. */
@@ -327,6 +329,7 @@ export class Multihelm {
           const current = (): boolean =>
             !this.stopped && this.peers.includes(peer) && peer.url === url && peer.ca === ca
           let hello
+          const asked = Date.now()
           try {
             hello = await fetchHello(peer, peer.token, this.helloFrom())
           } catch (error) {
@@ -339,7 +342,7 @@ export class Multihelm {
           if (!current() || hello.serverId !== peer.id) {
             return
           }
-          this.answered(url, hello)
+          this.answered(url, hello, asked)
           if (hello.master) {
             this.masterSeen.set(url, Date.now())
           } else {
@@ -555,13 +558,13 @@ export class Multihelm {
   private hasMostVotes(): boolean {
     const now = Date.now()
     const total = 1 + this.pairedPeers().length
-    let votes = 1
+    let votes = this.castVote() === this.serverId ? 1 : 0
     for (const peer of this.pairedPeers()) {
       const answer = this.answers.get(peer.url)
       if (
         answer?.hello.serverId === peer.id &&
         answer.hello.elects === this.serverId &&
-        now - answer.at <= VOTE_COUNT_MS
+        now - answer.asked <= VOTE_COUNT_MS
       ) {
         votes++
       }
@@ -773,8 +776,8 @@ export class Multihelm {
     }
   }
 
-  private answered(url: string, hello: Hello): void {
-    this.answers.set(url, { at: Date.now(), hello })
+  private answered(url: string, hello: Hello, asked: number): void {
+    this.answers.set(url, { at: Date.now(), asked, hello })
     this.helloErrors.delete(url)
     const peer = this.peers.find((p) => p.url === url)
     const quorum = hello.acting !== undefined
@@ -1248,6 +1251,7 @@ export class Multihelm {
 
   private async helloLocked(peer: Peer): Promise<void> {
     try {
+      const asked = Date.now()
       const hello = await fetchHello(peer, peer.token, this.helloFrom())
       if (hello.serverId === this.serverId) {
         peer.state = 'needs-pairing'
@@ -1257,7 +1261,7 @@ export class Multihelm {
       peer.id = hello.serverId
       peer.name = hello.name
       peer.lastSeen = Date.now()
-      this.answered(peer.url, hello)
+      this.answered(peer.url, hello, asked)
       if (hello.master) {
         this.masterSeen.set(peer.url, peer.lastSeen)
       } else {

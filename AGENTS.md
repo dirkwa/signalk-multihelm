@@ -106,8 +106,9 @@ sets by hand on one server (see `README.md`).
   A server acts until its master-only plugins have stopped, and while it has
   not looked at them without a usable record of them. Taking over needs
   `TAKEOVER_MS` without a master answer since this server's start, every
-  paired peer saying `acting`, and most servers' `elects` votes, counted for
-  `VOTE_COUNT_MS` and held by the voter for `VOTE_HOLD_MS`; a peer's
+  paired peer saying `acting`, and most servers' `elects` votes, its own
+  included, counted for `VOTE_COUNT_MS` from when it asked and held by the
+  voter for `VOTE_HOLD_MS`; a peer's
   `standby` is kept in the peers file so a restart still knows.
   Every server must reach the same answer.
 - **A file is served only if its dataset lists it**, and only while it still
