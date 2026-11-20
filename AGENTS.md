@@ -97,6 +97,10 @@ sets by hand on one server (see `README.md`).
   over, a server counts a master only while it sees most of the paired
   servers (a tie goes to the side with the one set by hand), and it acts as
   the master only once no peer's `hello` says `acting` (older peers: `master`).
+  A server acts until its master-only plugins have stopped. Taking over needs
+  `TAKEOVER_MS` without a master answer since this server's start, every
+  paired peer saying `acting`, and most servers' `elects` votes; a peer's
+  `standby` is kept in the peers file so a restart still knows.
   Every server must reach the same answer.
 - **A file is served only if its dataset lists it**, and only while it still
   has the size and time that were hashed.

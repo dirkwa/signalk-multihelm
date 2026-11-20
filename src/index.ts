@@ -244,6 +244,8 @@ export default function (app: ServerAPI): Plugin {
       // Schema defaults are not applied at runtime: a never configured plugin gets {}.
       const settings = config as Config
       const isMaster = settings.master === true
+      // Rounds start before the master-only plugins are set up, and ask meanwhile.
+      let masterPluginsRunHere = (): boolean => false
       const standby =
         typeof settings.takeOver === 'number' && Number.isInteger(settings.takeOver)
           ? Math.max(0, settings.takeOver)
@@ -253,6 +255,7 @@ export default function (app: ServerAPI): Plugin {
         serverName: () => os.hostname(),
         isMaster: () => isMaster,
         standby: () => standby,
+        stillRunning: () => masterPluginsRunHere(),
         versions: () => ({ signalk: host.config?.version, multihelm: multihelmVersion() }),
         debug: (msg) => {
           app.debug(msg)
@@ -305,6 +308,9 @@ export default function (app: ServerAPI): Plugin {
         access,
         ownUrl,
         selfId: PLUGIN_ID,
+        runningChanged: () => {
+          mh.actingChanged()
+        },
         debug: (msg) => {
           app.debug(msg)
         },
@@ -312,6 +318,7 @@ export default function (app: ServerAPI): Plugin {
           app.error(msg)
         }
       })
+      masterPluginsRunHere = () => masterPlugins.runsHere()
       const pluginList = new MasterPluginList(
         path.join(app.getDataDirPath(), 'master-plugins'),
         () => {

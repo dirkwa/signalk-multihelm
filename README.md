@@ -88,13 +88,19 @@ master, and the plugin status says to set one only.
 Other servers can take over while the master is gone: give each one a place
 under **Take over as master when the master is gone** (first, second, ...).
 When no server set to be the master has answered for three and a half
-minutes, the reachable server with the lowest place becomes the master,
+minutes, counted from a server's own start too, the reachable server with
+the lowest place becomes the master,
 with everything that follows the master: the plugins that run on the master
 only, the autopilot, the course, the alarms, the history and the charts it
 shows. When the master set by hand is back, it takes the role back.
 
 A server becomes the master only once the one before has stopped acting as
-it, so two never run the master's plugins at once. As soon as any server may
+it, so two never run the master's plugins at once; a server acts until its
+plugins that run on the master only have stopped, and keeps trying a stop
+that failed. A server taking over also needs the votes of most servers:
+each server votes for the one it would make the master, so two that share
+the reachable servers never both take over. No server takes over while a
+paired server runs a Multihelm too old to say whether it acts. As soon as any server may
 take over, a server is the master only while it reaches most of the boat's
 paired servers, itself included; on a boat of two, the one set by hand
 counts as most. A server cut off from the others, the master included,

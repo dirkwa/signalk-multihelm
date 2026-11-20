@@ -155,6 +155,8 @@ export interface SwitchHost {
   ownUrl: () => string
   /** Multihelm itself, which is never switched. */
   selfId: string
+  /** `runsHere()` changed. */
+  runningChanged?: () => void
   debug: (msg: string) => void
   error: (msg: string) => void
 }
@@ -165,17 +167,40 @@ function pluginUrl(base: string, id: string, rest = ''): string {
 
 /** Switches the listed plugins on this server to what its role wants; one run at a time. */
 export class MasterOnlyPlugins {
-  private running = false
+  private busy = false
   private again = false
+  /** Listed plugins this server found running or started, until it saw them stopped. */
+  private readonly running = new Set<string>()
 
   constructor(private readonly host: SwitchHost) {}
 
+  /**
+   * Whether a plugin that runs on the master only may still run here. A stop
+   * that failed keeps it so, and is tried again on the next pass: two servers
+   * must never run them at once.
+   */
+  runsHere(): boolean {
+    return [...this.running].some((id) => this.host.ids().includes(id))
+  }
+
+  private mark(id: string, running: boolean): void {
+    const before = this.runsHere()
+    if (running) {
+      this.running.add(id)
+    } else {
+      this.running.delete(id)
+    }
+    if (before !== this.runsHere()) {
+      this.host.runningChanged?.()
+    }
+  }
+
   apply(): void {
-    if (this.running) {
+    if (this.busy) {
       this.again = true
       return
     }
-    this.running = true
+    this.busy = true
     void this.applyOnce()
       .catch((error: unknown) => {
         this.host.error(
@@ -183,7 +208,7 @@ export class MasterOnlyPlugins {
         )
       })
       .finally(() => {
-        this.running = false
+        this.busy = false
         if (this.again) {
           this.again = false
           this.apply()
@@ -205,7 +230,9 @@ export class MasterOnlyPlugins {
     for (const id of ids) {
       try {
         const state = await callServer('GET', pluginUrl(base, id), token)
-        if ((state as { enabled?: unknown } | null)?.enabled === wanted) {
+        const enabled = (state as { enabled?: unknown } | null)?.enabled === true
+        this.mark(id, enabled)
+        if (enabled === wanted) {
           continue
         }
         const options = await callServer('GET', pluginUrl(base, id, '/config'), token)
@@ -220,13 +247,18 @@ export class MasterOnlyPlugins {
           typeof options === 'object' && options !== null && !Array.isArray(options)
             ? { ...options, enabled: wanted }
             : { enabled: wanted }
+        if (wanted) {
+          this.mark(id, true)
+        }
         await callServer('POST', pluginUrl(base, id, '/config'), token, body)
+        this.mark(id, wanted)
         this.host.debug(
           `Multihelm: ${wanted ? 'started' : 'stopped'} ${id}, which runs on the master only`
         )
       } catch (error) {
         if (error instanceof PeerHttpError && error.status === 404) {
           this.host.debug(`Multihelm: ${id}, set to run on the master only, is not installed here`)
+          this.mark(id, false)
           continue
         }
         if (error instanceof PeerHttpError && (error.status === 401 || error.status === 403)) {

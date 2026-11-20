@@ -87,6 +87,8 @@ export interface MultihelmHost {
   isMaster: () => boolean
   /** Its place among the servers that take over as master; 0: never. */
   standby?: () => number
+  /** Plugins that run on the master only still run here, or their stop has not been confirmed. */
+  stillRunning?: () => boolean
   /** What this server runs, for the peers to show. */
   versions?: () => { signalk?: string; multihelm?: string }
   debug: (msg: string) => void
@@ -211,6 +213,8 @@ export class Multihelm {
   private pairingTimer: NodeJS.Timeout | null = null
   private pollingPairings = false
   readonly serverId: string
+  /** No server takes over before `TAKEOVER_MS` without a master answer, counted from here too. */
+  private startedAt = Date.now()
 
   constructor(
     private readonly store: MultihelmStore,
@@ -222,6 +226,7 @@ export class Multihelm {
   }
 
   start(): void {
+    this.startedAt = Date.now()
     this.started = true
     this.stopped = false
     const tick = (): void => {
@@ -494,26 +499,29 @@ export class Multihelm {
   }
 
   private takeOverPossible(): boolean {
-    return (
-      (this.host.standby?.() ?? 0) > 0 ||
-      this.peers.some(
-        (p) => p.state === 'paired' && (this.answers.get(p.url)?.hello.standby ?? 0) > 0
-      )
-    )
+    return (this.host.standby?.() ?? 0) > 0 || this.pairedPeers().some((p) => (p.standby ?? 0) > 0)
+  }
+
+  private pairedPeers(): Peer[] {
+    return this.peers.filter((p) => p.state === 'paired' && p.id !== '')
   }
 
   /** The server that should be the master, as this one sees the boat; null while there is none. */
-  private elected(): { id: string; peer: Peer | null } | null {
+  private elected(): { id: string; peer: Peer | null; takingOver: boolean } | null {
     if (!this.hasMajority()) {
       return null
     }
     const set = this.masterCandidates()[0]
     if (set) {
-      return set
+      return { ...set, takingOver: false }
     }
     const now = Date.now()
-    const setRecently = [...this.masterSeen.values()].some((seen) => now - seen <= TAKEOVER_MS)
-    if (setRecently) {
+    const lastMaster = Math.max(this.startedAt, ...this.masterSeen.values())
+    if (now - lastMaster <= TAKEOVER_MS) {
+      return null
+    }
+    // A server that does not say whether it acts may still act as the master on its side of a split.
+    if (this.pairedPeers().some((p) => p.quorum !== true)) {
       return null
     }
     const standbys: { id: string; peer: Peer | null; order: number }[] = []
@@ -527,7 +535,16 @@ export class Multihelm {
       }
     }
     standbys.sort((x, y) => x.order - y.order || (x.id < y.id ? -1 : x.id > y.id ? 1 : 0))
-    return standbys[0] ?? null
+    const first = standbys[0]
+    return first ? { id: first.id, peer: first.peer, takingOver: true } : null
+  }
+
+  /** Each server votes for one, so two sides that share servers never both have most votes. */
+  private hasMostVotes(): boolean {
+    const total = 1 + this.pairedPeers().length
+    const votes =
+      1 + this.seenPeers(Date.now()).filter(({ hello }) => hello.elects === this.serverId).length
+    return 2 * votes > total
   }
 
   private acts(hello: Hello): boolean {
@@ -538,6 +555,9 @@ export class Multihelm {
   role(): Role {
     const elected = this.elected()
     if (elected?.peer !== null) {
+      return 'member'
+    }
+    if (elected.takingOver && !this.hasMostVotes()) {
       return 'member'
     }
     return this.seenPeers(Date.now()).some(({ hello }) => this.acts(hello)) ? 'member' : 'master'
@@ -684,7 +704,22 @@ export class Multihelm {
 
   private standing(): { standby?: number; acting: boolean } {
     const standby = this.host.standby?.() ?? 0
-    return { ...(standby > 0 ? { standby } : {}), acting: this.role() === 'master' }
+    const elects = this.elected()?.id
+    return {
+      ...(standby > 0 ? { standby } : {}),
+      acting: this.acting(),
+      ...(elects !== undefined ? { elects } : {})
+    }
+  }
+
+  /** Until the plugins that run on the master only have stopped here, this server still acts. */
+  private acting(): boolean {
+    return this.role() === 'master' || this.host.stillRunning?.() === true
+  }
+
+  /** Whether the plugins that run on the master only still run here changed: the peers hear at once. */
+  actingChanged(): void {
+    void this.checkMasters()
   }
 
   private versions(): { signalk?: string; multihelm?: string } {
@@ -697,7 +732,7 @@ export class Multihelm {
       serverId: this.serverId,
       name: this.host.serverName(),
       master: this.host.isMaster(),
-      acting: this.role() === 'master',
+      acting: this.acting(),
       ...this.versions()
     }
   }
@@ -705,6 +740,17 @@ export class Multihelm {
   private answered(url: string, hello: Hello): void {
     this.answers.set(url, { at: Date.now(), hello })
     this.helloErrors.delete(url)
+    const peer = this.peers.find((p) => p.url === url)
+    const quorum = hello.acting !== undefined
+    if (peer && (peer.standby !== hello.standby || (peer.quorum ?? false) !== quorum)) {
+      if (hello.standby === undefined) {
+        delete peer.standby
+      } else {
+        peer.standby = hello.standby
+      }
+      peer.quorum = quorum
+      this.store.savePeers(this.peers)
+    }
   }
 
   /**
