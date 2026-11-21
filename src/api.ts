@@ -92,7 +92,10 @@ export interface PeerInfo {
 /**
  * `master`: this server is the boat's master. `member`: another server is,
  * or none is. The master is set by hand on one server; when several are set,
- * the one with the smallest server id is the master.
+ * the one with the smallest server id is the master. While none set to be it
+ * is there, a server set to take over may be, and a server becomes the master
+ * only once every server it reaches has stopped acting as it (see the README
+ * for how far that goes when the network splits).
  */
 export type Role = 'master' | 'member'
 

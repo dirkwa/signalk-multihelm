@@ -146,6 +146,33 @@ export class MasterPluginList {
   }
 }
 
+/** What `masterPluginsWanted` reads of the election. */
+export interface Election {
+  roleKnown(): boolean
+  role(): 'master' | 'member'
+  masterElsewhere(): boolean
+  hasMajority(): boolean
+  electedWithout(): boolean
+  otherActs(): boolean
+}
+
+/**
+ * Nothing is switched before the role is known, nor on a server with no master to defer to,
+ * unless it reaches too few of the boat's servers to know there is none elsewhere, should be
+ * the master but may not be it yet, or sees another server still acting as it.
+ */
+export function masterPluginsWanted(e: Election): boolean | null {
+  if (!e.roleKnown()) {
+    return null
+  }
+  if (e.role() === 'master') {
+    return true
+  }
+  return e.masterElsewhere() || !e.hasMajority() || e.electedWithout() || e.otherActs()
+    ? false
+    : null
+}
+
 export interface SwitchHost {
   ids: () => string[]
   /** true: run them on this server; false: stop them here; null: leave them as they are. */
@@ -155,6 +182,13 @@ export interface SwitchHost {
   ownUrl: () => string
   /** Multihelm itself, which is never switched. */
   selfId: string
+  /** `runsHere()` changed. */
+  runningChanged?: () => void
+  /**
+   * Where the plugins seen running here are kept, so after a restart those
+   * not looked at again yet still count as running.
+   */
+  runningFile?: string
   debug: (msg: string) => void
   error: (msg: string) => void
 }
@@ -165,17 +199,101 @@ function pluginUrl(base: string, id: string, rest = ''): string {
 
 /** Switches the listed plugins on this server to what its role wants; one run at a time. */
 export class MasterOnlyPlugins {
-  private running = false
+  private busy = false
   private again = false
+  /** Listed plugins this server found running or started, until it saw them stopped. */
+  private readonly running = new Set<string>()
+  /** Without a usable record from before, a plugin not looked at since the start may run. */
+  private readonly unknown: boolean
+  private readonly looked = new Set<string>()
 
-  constructor(private readonly host: SwitchHost) {}
+  constructor(private readonly host: SwitchHost) {
+    const kept = this.loadRunning()
+    this.unknown = kept === null
+    for (const id of kept ?? []) {
+      this.running.add(id)
+    }
+  }
+
+  /** null: no usable record, so what runs here is unknown. */
+  private loadRunning(): string[] | null {
+    if (this.host.runningFile === undefined) {
+      return []
+    }
+    try {
+      const kept: unknown = JSON.parse(fs.readFileSync(this.host.runningFile, 'utf-8'))
+      return Array.isArray(kept) && kept.every((id) => typeof id === 'string' && PLUGIN_ID.test(id))
+        ? (kept as string[])
+        : null
+    } catch {
+      return null
+    }
+  }
+
+  /**
+   * Whether the record is safe to rely on after a restart: written, or
+   * removed when it could not be, so the next start treats it as unknown.
+   */
+  private saveRunning(): boolean {
+    const file = this.host.runningFile
+    if (file === undefined) {
+      return true
+    }
+    try {
+      fs.mkdirSync(path.dirname(file), { recursive: true })
+      fs.writeFileSync(`${file}.tmp`, JSON.stringify([...this.running]))
+      fs.renameSync(`${file}.tmp`, file)
+      return true
+    } catch (error) {
+      this.host.error(`Multihelm: cannot keep which plugins run here: ${errorText(error)}`)
+    }
+    try {
+      fs.rmSync(file, { force: true })
+      return true
+    } catch (error) {
+      this.host.error(`Multihelm: cannot remove ${file}: ${errorText(error)}`)
+      return false
+    }
+  }
+
+  /**
+   * Whether a plugin that runs on the master only may still run here. A stop
+   * that failed keeps it so, and is tried again on the next pass; while it
+   * does, the servers that see this one take no other master.
+   */
+  runsHere(): boolean {
+    return this.host
+      .ids()
+      .some(
+        (id) =>
+          id !== this.host.selfId &&
+          (this.running.has(id) || (this.unknown && !this.looked.has(id)))
+      )
+  }
+
+  /** Returns whether the record could be kept; a plugin is started only then. */
+  private mark(id: string, running: boolean): boolean {
+    const before = this.runsHere()
+    const changed = this.running.has(id) !== running || !this.looked.has(id)
+    this.looked.add(id)
+    if (running) {
+      this.running.add(id)
+    } else {
+      this.running.delete(id)
+    }
+    const kept = changed ? this.saveRunning() : true
+    if (before !== this.runsHere()) {
+      this.host.runningChanged?.()
+    }
+    return kept
+  }
 
   apply(): void {
-    if (this.running) {
+    if (this.busy) {
       this.again = true
       return
     }
-    this.running = true
+    this.busy = true
     void this.applyOnce()
       .catch((error: unknown) => {
         this.host.error(
@@ -183,7 +301,7 @@ export class MasterOnlyPlugins {
         )
       })
       .finally(() => {
-        this.running = false
+        this.busy = false
         if (this.again) {
           this.again = false
           this.apply()
@@ -194,7 +312,7 @@ export class MasterOnlyPlugins {
   async applyOnce(): Promise<void> {
     const wanted = this.host.wanted()
     const ids = this.host.ids().filter((id) => id !== this.host.selfId)
-    if (wanted === null || ids.length === 0) {
+    if (ids.length === 0) {
       return
     }
     const token = await this.host.access.token()
@@ -205,7 +323,10 @@ export class MasterOnlyPlugins {
     for (const id of ids) {
       try {
         const state = await callServer('GET', pluginUrl(base, id), token)
-        if ((state as { enabled?: unknown } | null)?.enabled === wanted) {
+        const enabled = (state as { enabled?: unknown } | null)?.enabled === true
+        this.mark(id, enabled)
+        // Looked at even while the role does not say, so `runsHere()` is never a guess.
+        if (wanted === null || enabled === wanted) {
           continue
         }
         const options = await callServer('GET', pluginUrl(base, id, '/config'), token)
@@ -220,13 +341,19 @@ export class MasterOnlyPlugins {
           typeof options === 'object' && options !== null && !Array.isArray(options)
             ? { ...options, enabled: wanted }
             : { enabled: wanted }
+        if (wanted && !this.mark(id, true)) {
+          this.host.error(`Multihelm: not starting ${id}: cannot keep that it runs here`)
+          continue
+        }
         await callServer('POST', pluginUrl(base, id, '/config'), token, body)
+        this.mark(id, wanted)
         this.host.debug(
           `Multihelm: ${wanted ? 'started' : 'stopped'} ${id}, which runs on the master only`
         )
       } catch (error) {
         if (error instanceof PeerHttpError && error.status === 404) {
           this.host.debug(`Multihelm: ${id}, set to run on the master only, is not installed here`)
+          this.mark(id, false)
           continue
         }
         if (error instanceof PeerHttpError && (error.status === 401 || error.status === 403)) {

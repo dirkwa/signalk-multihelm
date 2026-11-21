@@ -49,10 +49,12 @@ function helloFrom(req: Request): HelloFrom | null {
   const signalk = queryString(req, 'signalk')
   const multihelm = queryString(req, 'multihelm')
   const master = queryString(req, 'master')
+  const acting = queryString(req, 'acting')
   return {
     serverId,
     name,
     ...(master === '1' || master === '0' ? { master: master === '1' } : {}),
+    ...(acting === '1' || acting === '0' ? { acting: acting === '1' } : {}),
     ...(VERSION.test(signalk) ? { signalk } : {}),
     ...(VERSION.test(multihelm) ? { multihelm } : {})
   }
@@ -105,7 +107,7 @@ export function registerRoutes(
       if (from) {
         mh.sawPairedServer(from)
       }
-      res.json(mh.hello())
+      res.json(mh.hello(from?.serverId))
     })
   )
 
@@ -181,6 +183,7 @@ export function registerRoutes(
       role: mh?.role() ?? null,
       master: mh?.master() ?? null,
       masterConflict: mh?.masterConflict() ?? false,
+      majority: mh?.hasMajority() ?? true,
       datasets: mh?.datasetIds() ?? [],
       peers: mh?.peerInfo() ?? [],
       pairedBy: mh?.pairedByInfo() ?? [],

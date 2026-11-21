@@ -27,7 +27,7 @@ import { MasterCourse } from './course-from-master.js'
 import { ServerDiscovery } from './discovery.js'
 import { ConfigSchema } from './config.js'
 import { MasterFollower } from './follow-master.js'
-import { MasterOnlyPlugins, MasterPluginList } from './master-plugins.js'
+import { MasterOnlyPlugins, MasterPluginList, masterPluginsWanted } from './master-plugins.js'
 import { MasterHistory, canWithdrawHistoryProvider } from './history-from-master.js'
 import { MASTER_ROUTE, MasterProxy } from './master-proxy.js'
 import { Multihelm, ROUND_INTERVAL_MS } from './multihelm.js'
@@ -55,6 +55,7 @@ function multihelmVersion(): string | undefined {
 
 type Config = {
   master?: unknown
+  takeOver?: unknown
   syncResources?: unknown
   followVessel?: unknown
   followMetadata?: unknown
@@ -71,14 +72,24 @@ const APPROVE_HINT =
 const DENIED_HINT =
   'the access request on this server was denied, so the vessel settings are not taken over and no plugin is switched for the master; restart the plugin to ask again'
 
-function statusText(role: Role, master: PeerInfo | null, conflict: boolean): string {
+function statusText(
+  role: Role,
+  master: PeerInfo | null,
+  conflict: boolean,
+  majority: boolean
+): string {
   if (conflict) {
     return `${role === 'master' ? 'Master' : `Member, master: ${master?.name ?? '?'}`}. More than one server is set to be the master: set one only`
   }
   if (role === 'master') {
     return "Master of the boat's servers"
   }
-  return master ? `Member, master: ${master.name}` : 'Member, no master found'
+  if (master) {
+    return `Member, master: ${master.name}`
+  }
+  return majority
+    ? 'Member, no master found'
+    : "Member, no master: too few of the boat's servers are reachable"
 }
 
 /** The parts of the server the typed API leaves out. */
@@ -233,10 +244,18 @@ export default function (app: ServerAPI): Plugin {
       // Schema defaults are not applied at runtime: a never configured plugin gets {}.
       const settings = config as Config
       const isMaster = settings.master === true
+      // Rounds start before the master-only plugins are set up, and ask meanwhile.
+      let masterPluginsRunHere = (): boolean => false
+      const standby =
+        typeof settings.takeOver === 'number' && Number.isInteger(settings.takeOver)
+          ? Math.max(0, settings.takeOver)
+          : 0
       const store = new MultihelmStore(app.getDataDirPath())
       const mh = new Multihelm(store, {
         serverName: () => os.hostname(),
         isMaster: () => isMaster,
+        standby: () => standby,
+        stillRunning: () => masterPluginsRunHere(),
         versions: () => ({ signalk: host.config?.version, multihelm: multihelmVersion() }),
         debug: (msg) => {
           app.debug(msg)
@@ -276,12 +295,14 @@ export default function (app: ServerAPI): Plugin {
       ownAccess = access
       const masterPlugins = new MasterOnlyPlugins({
         ids: () => pluginList.ids(),
-        // Nothing is switched before the role is known, nor on a server with no master to defer to.
-        wanted: () =>
-          !mh.roleKnown() ? null : mh.role() === 'master' ? true : mh.master() ? false : null,
+        wanted: () => masterPluginsWanted(mh),
         access,
         ownUrl,
         selfId: PLUGIN_ID,
+        runningChanged: () => {
+          mh.actingChanged()
+        },
+        runningFile: path.join(app.getDataDirPath(), 'master-plugins-running.json'),
         debug: (msg) => {
           app.debug(msg)
         },
@@ -289,6 +310,7 @@ export default function (app: ServerAPI): Plugin {
           app.error(msg)
         }
       })
+      masterPluginsRunHere = () => masterPlugins.runsHere()
       const pluginList = new MasterPluginList(
         path.join(app.getDataDirPath(), 'master-plugins'),
         () => {
@@ -321,7 +343,7 @@ export default function (app: ServerAPI): Plugin {
         }
       })
       const showRole = (): void => {
-        const text = statusText(mh.role(), mh.master(), mh.masterConflict())
+        const text = statusText(mh.role(), mh.master(), mh.masterConflict(), mh.hasMajority())
         if (access.waitingForApproval()) {
           app.setPluginStatus(`${text}; ${APPROVE_HINT}`)
         } else if (access.denied()) {
