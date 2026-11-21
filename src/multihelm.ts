@@ -500,8 +500,8 @@ export class Multihelm {
 
   /**
    * Whether this server sees most of the boat's servers, itself included. A
-   * tie counts on the side of the server set to be the master, so two
-   * servers cut apart never both act as the master. Without a server that may
+   * tie counts on the side of the server set to be the master, so of two
+   * servers cut apart only that one may be the master. Without a server that may
    * take over, only the one set to be the master ever is, so it needs none.
    */
   hasMajority(): boolean {

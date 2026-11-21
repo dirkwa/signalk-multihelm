@@ -30,8 +30,8 @@ export interface Status {
   master: PeerInfo | null
   masterConflict: boolean
   /**
-   * This server reaches most of the boat's servers; without that none is the
-   * master, so two never act as it at once. Older versions leave it out.
+   * This server reaches most of the boat's servers; without that it is not
+   * the master. Older versions leave it out.
    */
   majority?: boolean
   datasets: string[]
