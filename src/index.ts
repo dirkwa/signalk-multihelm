@@ -298,13 +298,14 @@ export default function (app: ServerAPI): Plugin {
       const masterPlugins = new MasterOnlyPlugins({
         ids: () => pluginList.ids(),
         // Nothing is switched before the role is known, nor on a server with no master to defer to,
-        // unless it reaches too few of the boat's servers to know there is none elsewhere.
+        // unless it reaches too few of the boat's servers to know there is none elsewhere, or would
+        // take over but lacks the votes or the peers' knowledge to.
         wanted: () =>
           !mh.roleKnown()
             ? null
             : mh.role() === 'master'
               ? true
-              : mh.masterElsewhere() || !mh.hasMajority()
+              : mh.masterElsewhere() || !mh.hasMajority() || mh.takingOverWithout()
                 ? false
                 : null,
         access,

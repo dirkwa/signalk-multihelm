@@ -55,6 +55,8 @@ export interface Hello {
   acting?: boolean
   /** The server it would make the master by taking over; its vote, so two never take over at once. */
   elects?: string
+  /** The place to take over it keeps for the server asking, 0 for none; a server takes over only once every peer knows its place. */
+  seesStandby?: number
   /** The Signal K server's version; older Multihelm versions leave it out. */
   signalk?: string
   /** Multihelm's version; older Multihelm versions leave it out. */
@@ -338,11 +340,15 @@ export async function fetchHello(
   const standby = (body as { standby?: unknown }).standby
   const acting = (body as { acting?: unknown }).acting
   const elects = (body as { elects?: unknown }).elects
+  const seesStandby = (body as { seesStandby?: unknown }).seesStandby
   return {
     ...hello,
     ...(typeof standby === 'number' && Number.isInteger(standby) && standby > 0 ? { standby } : {}),
     ...(typeof acting === 'boolean' ? { acting } : {}),
     ...(typeof elects === 'string' && elects !== '' ? { elects } : {}),
+    ...(typeof seesStandby === 'number' && Number.isInteger(seesStandby) && seesStandby >= 0
+      ? { seesStandby }
+      : {}),
     ...(signalk ? { signalk } : {}),
     ...(multihelm ? { multihelm } : {})
   }

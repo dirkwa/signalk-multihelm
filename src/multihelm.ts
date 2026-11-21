@@ -554,6 +554,15 @@ export class Multihelm {
     return first ? { id: first.id, peer: first.peer, takingOver: true } : null
   }
 
+  /**
+   * A peer that does not know this server may take over does not count the
+   * majority, and may act as the master on its own.
+   */
+  private peersKnowStandby(): boolean {
+    const own = this.host.standby?.() ?? 0
+    return this.pairedPeers().every((p) => p.seesStandby === own)
+  }
+
   /** Each server votes for one, so two sides that share servers never both have most votes. */
   private hasMostVotes(): boolean {
     const now = Date.now()
@@ -596,10 +605,16 @@ export class Multihelm {
     if (elected?.peer !== null) {
       return 'member'
     }
-    if (elected.takingOver && !this.hasMostVotes()) {
+    if (elected.takingOver && (!this.peersKnowStandby() || !this.hasMostVotes())) {
       return 'member'
     }
     return this.seenPeers(Date.now()).some(({ hello }) => this.acts(hello)) ? 'member' : 'master'
+  }
+
+  /** This server would take over as the master, but may not be it now. */
+  takingOverWithout(): boolean {
+    const elected = this.elected()
+    return elected?.peer === null && elected.takingOver && this.role() !== 'master'
   }
 
   /** The master to follow, once it acts as the master; null when this server is it or there is none. */
@@ -729,7 +744,8 @@ export class Multihelm {
 
   // --- serving --------------------------------------------------------
 
-  hello(): Hello {
+  hello(asker?: string): Hello {
+    const peer = asker === undefined ? undefined : this.pairedPeers().find((p) => p.id === asker)
     return {
       serverId: this.serverId,
       name: this.host.serverName(),
@@ -737,6 +753,7 @@ export class Multihelm {
       datasets: this.datasetIds(),
       master: this.host.isMaster(),
       ...this.standing(),
+      ...(peer ? { seesStandby: peer.standby ?? 0 } : {}),
       ...this.versions()
     }
   }
@@ -781,13 +798,21 @@ export class Multihelm {
     this.helloErrors.delete(url)
     const peer = this.peers.find((p) => p.url === url)
     const quorum = hello.acting !== undefined
-    if (peer && (peer.standby !== hello.standby || (peer.quorum ?? false) !== quorum)) {
+    if (
+      peer &&
+      (peer.standby !== hello.standby ||
+        (peer.quorum ?? false) !== quorum ||
+        (hello.seesStandby !== undefined && peer.seesStandby !== hello.seesStandby))
+    ) {
       if (hello.standby === undefined) {
         delete peer.standby
       } else {
         peer.standby = hello.standby
       }
       peer.quorum = quorum
+      if (hello.seesStandby !== undefined) {
+        peer.seesStandby = hello.seesStandby
+      }
       this.store.savePeers(this.peers)
     }
   }

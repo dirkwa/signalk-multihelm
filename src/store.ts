@@ -36,6 +36,8 @@ export const PeerSchema = Type.Object({
   standby: Type.Optional(Type.Integer({ minimum: 1 })),
   /** Its `hello` says whether it acts as the master, so it stops acting without most servers. */
   quorum: Type.Optional(Type.Boolean()),
+  /** The place to take over that its last `hello` said it keeps for this server. */
+  seesStandby: Type.Optional(Type.Integer({ minimum: 0 })),
   lastSync: Type.Optional(Type.Number()),
   lastError: Type.Optional(Type.String())
 })

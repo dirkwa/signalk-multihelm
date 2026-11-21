@@ -26,6 +26,8 @@ interface Station {
   legacy: boolean
   /** Plugins that run on the master only still run here. */
   pluginsRunning: boolean
+  /** Its place to take over as master; the user may change it. */
+  standby: number
   /** Its answers to these server ids take this long, as on a slow link. */
   stalls: Map<string, number>
   server: http.Server
@@ -34,10 +36,11 @@ interface Station {
 const stations: Station[] = []
 
 function multihelmOf(s: Station, master: boolean, standby: number): Multihelm {
+  s.standby = standby
   return new Multihelm(new MultihelmStore(path.join(root, s.name)), {
     serverName: () => s.name,
     isMaster: () => master,
-    standby: () => standby,
+    standby: () => s.standby,
     stillRunning: () => s.pluginsRunning,
     debug: () => undefined,
     error: () => undefined
@@ -395,6 +398,51 @@ describe('a takeover that must not happen twice', () => {
       cBecameMaster ||= c.mh.role() === 'master'
     }
     expect(cBecameMaster).toBe(true)
+  })
+
+  it('takes over only once every server knows it may', async () => {
+    const salon = await station('t14-salon', true)
+    const b = await station('t14-b', false)
+    const c = await station('t14-c', false)
+    await boat(salon, b, c)
+    salon.down = true
+    // Set to take over while the master set by hand cannot hear of it.
+    b.standby = 1
+    pass(TAKEOVER_MS + 1)
+    for (let i = 0; i < 3; i++) {
+      await check(b, c)
+    }
+    expect(c.mh.master()).toBeNull()
+    expect(b.mh.role()).toBe('member')
+    expect(b.mh.takingOverWithout()).toBe(true)
+
+    salon.down = false
+    salon.refuses.add(b.mh.serverId)
+    salon.refuses.add(c.mh.serverId)
+    await check(salon, b, c)
+    expect(b.mh.role()).toBe('member')
+  })
+
+  it('stands down a takeover that lost its votes while it still reaches most servers', async () => {
+    const b = await station('t15-b', false, 1)
+    const c = await station('t15-c', false, 2)
+    const d = await station('t15-d', false)
+    await boat(b, c, d)
+    pass(TAKEOVER_MS + 1)
+    await check(b, c, d)
+    expect(b.mh.role()).toBe('master')
+
+    // C and D stop hearing B; B still hears C, so it reaches most servers but loses their votes.
+    b.refuses.add(c.mh.serverId)
+    b.refuses.add(d.mh.serverId)
+    d.refuses.add(b.mh.serverId)
+    for (let t = 0; t < 30 && b.mh.role() === 'master'; t++) {
+      pass(10_000)
+      await check(b, c, d)
+    }
+    expect(b.mh.role()).toBe('member')
+    expect(b.mh.hasMajority()).toBe(true)
+    expect(b.mh.takingOverWithout()).toBe(true)
   })
 
   it('still acts until the plugins that run on the master only have stopped', async () => {

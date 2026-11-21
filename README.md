@@ -102,7 +102,10 @@ and has no record of them, counts as acting until it has, so approve its
 own access request. A server taking over also needs the votes of most
 servers: each server votes for one server at a time and keeps that vote for
 a while after it last gave it, so two that share the reachable servers never
-both take over. No server takes over while a
+both take over. A server takes over only once every paired server has heard of its place,
+so a master cut off before it was set does not keep acting beside it, and it
+stops the plugins that run on the master only as soon as it loses those votes.
+No server takes over while a
 paired server runs a Multihelm too old to say whether it acts. As soon as any server may
 take over, a server is the master only while it reaches most of the boat's
 paired servers, itself included; on a boat of two, the one set by hand
