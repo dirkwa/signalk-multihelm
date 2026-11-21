@@ -107,7 +107,7 @@ export function registerRoutes(
       if (from) {
         mh.sawPairedServer(from)
       }
-      res.json(mh.hello())
+      res.json(mh.hello(from?.serverId))
     })
   )
 
