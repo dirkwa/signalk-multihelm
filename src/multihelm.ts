@@ -565,7 +565,7 @@ export class Multihelm {
   }
 
   /** Each server votes for one, so two sides that share servers never both have most votes. */
-  private hasMostVotes(): boolean {
+  private hasMostVotes(tieWins: boolean): boolean {
     const now = Date.now()
     const total = 1 + this.pairedPeers().length
     let votes = this.castVote() === this.serverId ? 1 : 0
@@ -579,7 +579,7 @@ export class Multihelm {
         votes++
       }
     }
-    return 2 * votes > total
+    return 2 * votes > total || (tieWins && 2 * votes === total)
   }
 
   /** The vote this server gives now: none while it still holds one for another server. */
@@ -606,7 +606,11 @@ export class Multihelm {
     if (elected?.peer !== null) {
       return 'member'
     }
-    if (elected.takingOver && (!this.peersKnowStandby() || !this.hasMostVotes())) {
+    if (elected.takingOver && (!this.peersKnowStandby() || !this.hasMostVotes(false))) {
+      return 'member'
+    }
+    // Handing back waits for the votes too: a standby counts no vote the master set by hand has.
+    if (!elected.takingOver && this.takeOverPossible() && !this.hasMostVotes(true)) {
       return 'member'
     }
     return this.seenPeers(Date.now()).some(({ hello }) => this.acts(hello)) ? 'member' : 'master'

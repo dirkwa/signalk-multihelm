@@ -146,6 +146,30 @@ export class MasterPluginList {
   }
 }
 
+/** What `masterPluginsWanted` reads of the election. */
+export interface Election {
+  roleKnown(): boolean
+  role(): 'master' | 'member'
+  masterElsewhere(): boolean
+  hasMajority(): boolean
+  takingOverWithout(): boolean
+}
+
+/**
+ * Nothing is switched before the role is known, nor on a server with no master to defer to,
+ * unless it reaches too few of the boat's servers to know there is none elsewhere, or would
+ * take over but lacks the votes or the peers' knowledge to.
+ */
+export function masterPluginsWanted(e: Election): boolean | null {
+  if (!e.roleKnown()) {
+    return null
+  }
+  if (e.role() === 'master') {
+    return true
+  }
+  return e.masterElsewhere() || !e.hasMajority() || e.takingOverWithout() ? false : null
+}
+
 export interface SwitchHost {
   ids: () => string[]
   /** true: run them on this server; false: stop them here; null: leave them as they are. */

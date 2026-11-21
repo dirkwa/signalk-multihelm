@@ -7,8 +7,15 @@ import path from 'node:path'
 import express from 'express'
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-import { MASTER_STALE_MS, Multihelm, TAKEOVER_MS, VOTE_COUNT_MS } from '../src/multihelm.js'
+import {
+  MASTER_STALE_MS,
+  Multihelm,
+  TAKEOVER_MS,
+  VOTE_COUNT_MS,
+  VOTE_HOLD_MS
+} from '../src/multihelm.js'
 import { ROUTE_PREFIX, type Hello } from '../src/peer-client.js'
+import { masterPluginsWanted } from '../src/master-plugins.js'
 import { registerRoutes } from '../src/routes.js'
 import { MultihelmStore } from '../src/store.js'
 
@@ -197,13 +204,17 @@ describe('a server that takes over as master', () => {
       changes.push(`port ${role}`)
     })
     salon.down = false
-    await vi.waitFor(async () => {
-      await salon.mh.checkMasters()
-      expect(salon.mh.role()).toBe('master')
-    })
+    // Back, the salon waits for the votes the others still hold for the port.
+    for (let t = 0; t < 20 && salon.mh.role() !== 'master'; t++) {
+      pass(10_000)
+      await check(salon, port, stbd)
+      expect(salon.mh.role() === 'master' && port.mh.role() === 'master').toBe(false)
+    }
+    expect(salon.mh.role()).toBe('master')
     expect(port.mh.role()).toBe('member')
-    // Back, the salon sees the port still acting, and becomes the master only once it has stopped.
-    expect(changes).toEqual(['salon member', 'port member', 'salon master'])
+    // The salon sees the port still acting, and becomes the master only once it has stopped.
+    // The port hears of its new master too, as a member still.
+    expect(changes).toEqual(['salon member', 'port member', 'salon master', 'port member'])
     await vi.waitFor(async () => {
       await stbd.mh.checkMasters()
       expect(stbd.mh.master()?.name).toBe('t3-salon')
@@ -415,6 +426,7 @@ describe('a takeover that must not happen twice', () => {
     expect(c.mh.master()).toBeNull()
     expect(b.mh.role()).toBe('member')
     expect(b.mh.takingOverWithout()).toBe(true)
+    expect(masterPluginsWanted(b.mh)).toBe(false)
 
     salon.down = false
     salon.refuses.add(b.mh.serverId)
@@ -443,6 +455,36 @@ describe('a takeover that must not happen twice', () => {
     expect(b.mh.role()).toBe('member')
     expect(b.mh.hasMajority()).toBe(true)
     expect(b.mh.takingOverWithout()).toBe(true)
+    expect(masterPluginsWanted(b.mh)).toBe(false)
+  })
+
+  it('hands back to a master set by hand that cannot reach the acting one only once its votes are gone', async () => {
+    const salon = await station('t16-salon', true)
+    const b = await station('t16-b', false, 1)
+    const c = await station('t16-c', false)
+    const d = await station('t16-d', false)
+    await boat(salon, b, c, d)
+    salon.down = true
+    pass(TAKEOVER_MS + 1)
+    for (let i = 0; i < 2; i++) {
+      await check(b, c, d)
+    }
+    expect(b.mh.role()).toBe('master')
+
+    // The salon comes back, but it and B cannot reach each other.
+    salon.down = false
+    salon.refuses.add(b.mh.serverId)
+    b.refuses.add(salon.mh.serverId)
+    let salonBecameMaster = false
+    for (let t = 0; t < 20; t++) {
+      pass(10_000)
+      for (const s of [b, salon, c, d]) {
+        await s.mh.checkMasters()
+      }
+      expect(salon.mh.role() === 'master' && b.mh.role() === 'master').toBe(false)
+      salonBecameMaster ||= salon.mh.role() === 'master'
+    }
+    expect(salonBecameMaster).toBe(true)
   })
 
   it('still acts until the plugins that run on the master only have stopped', async () => {
@@ -459,6 +501,10 @@ describe('a takeover that must not happen twice', () => {
     salon.down = false
     await check(salon, port, stbd)
     expect(port.mh.role()).toBe('member')
+    expect(salon.mh.role()).toBe('member')
+
+    pass(VOTE_HOLD_MS)
+    await check(salon, port, stbd)
     expect(salon.mh.role()).toBe('member')
 
     port.pluginsRunning = false

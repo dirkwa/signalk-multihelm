@@ -27,7 +27,7 @@ import { MasterCourse } from './course-from-master.js'
 import { ServerDiscovery } from './discovery.js'
 import { ConfigSchema } from './config.js'
 import { MasterFollower } from './follow-master.js'
-import { MasterOnlyPlugins, MasterPluginList } from './master-plugins.js'
+import { MasterOnlyPlugins, MasterPluginList, masterPluginsWanted } from './master-plugins.js'
 import { MasterHistory, canWithdrawHistoryProvider } from './history-from-master.js'
 import { MASTER_ROUTE, MasterProxy } from './master-proxy.js'
 import { Multihelm, ROUND_INTERVAL_MS } from './multihelm.js'
@@ -295,17 +295,7 @@ export default function (app: ServerAPI): Plugin {
       ownAccess = access
       const masterPlugins = new MasterOnlyPlugins({
         ids: () => pluginList.ids(),
-        // Nothing is switched before the role is known, nor on a server with no master to defer to,
-        // unless it reaches too few of the boat's servers to know there is none elsewhere, or would
-        // take over but lacks the votes or the peers' knowledge to.
-        wanted: () =>
-          !mh.roleKnown()
-            ? null
-            : mh.role() === 'master'
-              ? true
-              : mh.masterElsewhere() || !mh.hasMajority() || mh.takingOverWithout()
-                ? false
-                : null,
+        wanted: () => masterPluginsWanted(mh),
         access,
         ownUrl,
         selfId: PLUGIN_ID,
