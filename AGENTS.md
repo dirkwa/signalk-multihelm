@@ -103,7 +103,8 @@ sets by hand on one server (see `README.md`).
   paired peer saying `acting` and, in `seesStandby`, this server's current
   `standby` place, and most servers' `elects` votes, its own
   included, counted for `VOTE_COUNT_MS` from when it asked and held by the
-  voter for `VOTE_HOLD_MS`. The one set by hand needs those votes too
+  voter for `VOTE_HOLD_MS`; a server gives no vote while it, or a peer it
+  sees, acts for another. The one set by hand needs those votes too
   while any server may take over, a tie counting for it; a peer's
   `standby` is kept in the peers file so a restart still knows.
   Every server must reach the same answer.

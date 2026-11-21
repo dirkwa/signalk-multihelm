@@ -425,7 +425,7 @@ describe('a takeover that must not happen twice', () => {
     }
     expect(c.mh.master()).toBeNull()
     expect(b.mh.role()).toBe('member')
-    expect(b.mh.takingOverWithout()).toBe(true)
+    expect(b.mh.electedWithout()).toBe(true)
     expect(masterPluginsWanted(b.mh)).toBe(false)
 
     salon.down = false
@@ -454,7 +454,7 @@ describe('a takeover that must not happen twice', () => {
     }
     expect(b.mh.role()).toBe('member')
     expect(b.mh.hasMajority()).toBe(true)
-    expect(b.mh.takingOverWithout()).toBe(true)
+    expect(b.mh.electedWithout()).toBe(true)
     expect(masterPluginsWanted(b.mh)).toBe(false)
   })
 
@@ -485,6 +485,83 @@ describe('a takeover that must not happen twice', () => {
       salonBecameMaster ||= salon.mh.role() === 'master'
     }
     expect(salonBecameMaster).toBe(true)
+  })
+
+  it('hands back to a master set by hand that cannot reach the acting one only once its plugins have stopped', async () => {
+    const salon = await station('t17-salon', true)
+    const b = await station('t17-b', false, 1)
+    const c = await station('t17-c', false)
+    const d = await station('t17-d', false)
+    await boat(salon, b, c, d)
+    salon.down = true
+    pass(TAKEOVER_MS + 1)
+    for (let i = 0; i < 2; i++) {
+      await check(b, c, d)
+    }
+    expect(b.mh.role()).toBe('master')
+
+    // B cannot stop its plugins, and it and the salon cannot reach each other.
+    b.pluginsRunning = true
+    salon.down = false
+    salon.refuses.add(b.mh.serverId)
+    b.refuses.add(salon.mh.serverId)
+    const round = async (): Promise<void> => {
+      pass(10_000)
+      for (const s of [b, salon, c, d]) {
+        await s.mh.checkMasters()
+      }
+    }
+    for (let t = 0; t < 20; t++) {
+      await round()
+      expect(salon.mh.role()).toBe('member')
+    }
+    expect(b.mh.role()).toBe('member')
+    expect(masterPluginsWanted(b.mh)).toBe(false)
+
+    b.pluginsRunning = false
+    for (let t = 0; t < 20 && salon.mh.role() !== 'master'; t++) {
+      await round()
+    }
+    expect(salon.mh.role()).toBe('master')
+  })
+
+  it('stops the plugins on a master set by hand that reaches most servers but lost their votes', async () => {
+    const salon = await station('t18-salon', true)
+    const b = await station('t18-b', false, 1)
+    const c = await station('t18-c', false)
+    const d = await station('t18-d', false)
+    await boat(salon, b, c, d)
+    expect(salon.mh.role()).toBe('master')
+
+    // The salon still hears the others, but they no longer hear it.
+    for (const s of [b, c, d]) {
+      salon.refuses.add(s.mh.serverId)
+    }
+    for (let t = 0; t < 30 && salon.mh.role() === 'master'; t++) {
+      pass(10_000)
+      await check(salon, b, c, d)
+    }
+    expect(salon.mh.role()).toBe('member')
+    expect(salon.mh.hasMajority()).toBe(true)
+    expect(masterPluginsWanted(salon.mh)).toBe(false)
+  })
+
+  it('stops the plugins on a server that knows no master yet but sees another one acting', async () => {
+    const salon = await station('t19-salon', true)
+    const port = await station('t19-port', false, 1)
+    const stbd = await station('t19-stbd', false)
+    await boat(salon, port, stbd)
+    salon.down = true
+    pass(TAKEOVER_MS + 1)
+    await check(port, stbd)
+    expect(port.mh.role()).toBe('master')
+    port.pluginsRunning = true
+
+    stbd.mh = multihelmOf(stbd, false, 0)
+    await check(port, stbd)
+    expect(stbd.mh.masterElsewhere()).toBe(false)
+    expect(stbd.mh.hasMajority()).toBe(true)
+    expect(masterPluginsWanted(stbd.mh)).toBe(false)
   })
 
   it('still acts until the plugins that run on the master only have stopped', async () => {

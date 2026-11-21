@@ -152,13 +152,14 @@ export interface Election {
   role(): 'master' | 'member'
   masterElsewhere(): boolean
   hasMajority(): boolean
-  takingOverWithout(): boolean
+  electedWithout(): boolean
+  otherActs(): boolean
 }
 
 /**
  * Nothing is switched before the role is known, nor on a server with no master to defer to,
- * unless it reaches too few of the boat's servers to know there is none elsewhere, or would
- * take over but lacks the votes or the peers' knowledge to.
+ * unless it reaches too few of the boat's servers to know there is none elsewhere, should be
+ * the master but may not be it yet, or sees another server still acting as it.
  */
 export function masterPluginsWanted(e: Election): boolean | null {
   if (!e.roleKnown()) {
@@ -167,7 +168,9 @@ export function masterPluginsWanted(e: Election): boolean | null {
   if (e.role() === 'master') {
     return true
   }
-  return e.masterElsewhere() || !e.hasMajority() || e.takingOverWithout() ? false : null
+  return e.masterElsewhere() || !e.hasMajority() || e.electedWithout() || e.otherActs()
+    ? false
+    : null
 }
 
 export interface SwitchHost {
