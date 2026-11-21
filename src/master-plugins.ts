@@ -283,8 +283,8 @@ export class MasterOnlyPlugins {
 
   /**
    * Whether a plugin that runs on the master only may still run here. A stop
-   * that failed keeps it so, and is tried again on the next pass, so a
-   * handover waits for it.
+   * that failed keeps it so, and is tried again on the next pass; while it
+   * does, the servers that see this one take no other master.
    */
   runsHere(): boolean {
     return this.host

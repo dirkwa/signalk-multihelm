@@ -698,7 +698,7 @@ export class Multihelm {
       const wasActing = this.announcedRole.startsWith('master:')
       this.announcedRole = now
       if (wasActing !== (role === 'master')) {
-        // The peers wait for this server to stop acting before one of them starts.
+        // A peer that sees this server acting takes no other master until it stops.
         void this.checkMasters()
       }
       for (const cb of this.roleListeners) {
