@@ -289,7 +289,8 @@ export class Multihelm {
   /**
    * Asks every paired peer whether it is set to be the master. Runs outside
    * the work queue and touches nothing but what it keeps of the answers, so it neither waits
-   * for a round nor races one.
+   * for a round nor races one. The takeover facts it keeps on a peer are saved in one
+   * synchronous write of the peers as they are, which no queued step can interleave.
    */
   checkMasters(): Promise<void> {
     if (this.stopped) {
@@ -673,7 +674,7 @@ export class Multihelm {
     const role = this.role()
     const master = this.master()
     const now = `${role}:${master?.id ?? ''}`
-    const status = `${now}:${String(this.masterConflict())}`
+    const status = `${now}:${String(this.masterConflict())}:${String(this.hasMajority())}`
     if (now !== this.announcedRole) {
       const wasActing = this.announcedRole.startsWith('master:')
       this.announcedRole = now
