@@ -102,7 +102,9 @@ and has no record of them, counts as acting until it has, so approve its
 own access request. A server taking over also needs the votes of most
 servers: each server votes for one server at a time and keeps that vote for
 a while after it last gave it, so two that share the reachable servers never
-both take over. A server takes over only once every paired server has heard of its place,
+both take over. The server set by hand gets the role back the same way, with most votes, so
+it waits until the servers between it and a standby have stopped voting for
+that one. A server takes over only once every paired server has heard of its place,
 so a master cut off before it was set does not keep acting beside it, and it
 stops the plugins that run on the master only as soon as it loses those votes.
 No server takes over while a
