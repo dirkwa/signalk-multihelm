@@ -94,8 +94,8 @@ with everything that follows the master: the plugins that run on the master
 only, the autopilot, the course, the alarms, the history and the charts it
 shows. When the master set by hand is back, it takes the role back.
 
-A server becomes the master only once the one before has stopped acting as
-it, so two never run the master's plugins at once; a server acts until its
+A server becomes the master only once every server it reaches has stopped
+acting as it; a server acts until its
 plugins that run on the master only have stopped, and keeps trying a stop
 that failed. A server that has not looked at those plugins since its start,
 and has no record of them, counts as acting until it has, so approve its
@@ -106,7 +106,12 @@ both take over. The server set by hand gets the role back the same way, with mos
 it waits until the servers between it and a standby have stopped voting for
 that one. A server gives no vote while it, or a server it reaches, still
 acts as the master for another, so a master whose plugins will not stop holds
-up the handover even where the new one cannot reach it. A server takes over only once every paired server has heard of its place,
+up the handover even where the new one cannot reach it, as long as the
+servers that still see it can deny the new one most votes. That is as far as
+the guarantee goes: when the network splits so that the new master and most
+servers no longer reach the old one, and the old one cannot stop its plugins
+on its own, both may run them until it can. Its stop is a call to its own
+Signal K, retried every round. A server takes over only once every paired server has heard of its place,
 so a master cut off before it was set does not keep acting beside it, and it
 stops the plugins that run on the master only as soon as it loses those votes,
 as does any server that sees another acting.
