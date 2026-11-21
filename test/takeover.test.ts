@@ -564,6 +564,64 @@ describe('a takeover that must not happen twice', () => {
     expect(masterPluginsWanted(stbd.mh)).toBe(false)
   })
 
+  // Known limits: an old master that cannot stop its plugins and is seen by too few servers to deny the votes.
+  it('hands back while the acting standby cannot stop its plugins, once only a minority still sees it', async () => {
+    const salon = await station('t20-salon', true)
+    const b = await station('t20-b', false, 1)
+    const c = await station('t20-c', false)
+    const d = await station('t20-d', false)
+    await boat(salon, b, c, d)
+    salon.down = true
+    pass(TAKEOVER_MS + 1)
+    for (let i = 0; i < 2; i++) {
+      await check(b, c, d)
+    }
+    expect(b.mh.role()).toBe('master')
+
+    // Only C still reaches B, whose plugins will not stop.
+    b.pluginsRunning = true
+    salon.down = false
+    for (const [x, y] of [
+      [b, salon],
+      [b, d]
+    ] as const) {
+      x.refuses.add(y.mh.serverId)
+      y.refuses.add(x.mh.serverId)
+    }
+    for (let t = 0; t < 30 && salon.mh.role() !== 'master'; t++) {
+      pass(10_000)
+      for (const s of [b, salon, c, d]) {
+        await s.mh.checkMasters()
+      }
+    }
+    expect(salon.mh.role()).toBe('master')
+    expect(masterPluginsWanted(b.mh)).toBe(false)
+  })
+
+  it('takes over beside a master that cannot stop its plugins and is seen by a minority only', async () => {
+    const a = await station('t21-a', true)
+    const b = await station('t21-b', false, 1)
+    const c = await station('t21-c', false)
+    const d = await station('t21-d', false)
+    const e = await station('t21-e', false)
+    await boat(a, b, c, d, e)
+    expect(a.mh.role()).toBe('master')
+
+    // Only C still reaches A, whose plugins will not stop.
+    a.pluginsRunning = true
+    for (const other of [b, d, e]) {
+      a.refuses.add(other.mh.serverId)
+      other.refuses.add(a.mh.serverId)
+    }
+    for (let t = 0; t < 40 && b.mh.role() !== 'master'; t++) {
+      pass(10_000)
+      await check(a, b, c, d, e)
+    }
+    expect(b.mh.role()).toBe('master')
+    expect(a.mh.hasMajority()).toBe(false)
+    expect(masterPluginsWanted(a.mh)).toBe(false)
+  })
+
   it('still acts until the plugins that run on the master only have stopped', async () => {
     const salon = await station('t10-salon', true)
     const port = await station('t10-port', false, 1)
