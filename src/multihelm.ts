@@ -67,7 +67,7 @@ export const MASTER_STALE_MS = 5 * MASTER_CHECK_INTERVAL_MS
 /**
  * A server takes over as master only once the one set to be it has been gone
  * this long: by then a master cut off from the others has seen them go and
- * stopped acting, so the two never act at once.
+ * stopped acting, unless it cannot stop its plugins.
  */
 export const TAKEOVER_MS = MASTER_STALE_MS + 2 * MASTER_CHECK_INTERVAL_MS
 
@@ -611,7 +611,7 @@ export class Multihelm {
     return hello.acting ?? hello.master
   }
 
-  /** A server becomes the master only once the one before has stopped acting as it. */
+  /** A server becomes the master only once every server it sees has stopped acting as it. */
   role(): Role {
     const elected = this.elected()
     if (elected?.peer !== null) {
