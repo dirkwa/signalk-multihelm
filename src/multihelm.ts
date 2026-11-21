@@ -589,11 +589,22 @@ export class Multihelm {
     if (choice === undefined) {
       return undefined
     }
+    // A server still acting beside the choice may be one its candidate cannot see.
+    if (this.actsBesides(choice, now)) {
+      return undefined
+    }
     if (this.vote === null || this.vote.for === choice || now - this.vote.at > VOTE_HOLD_MS) {
       this.vote = { for: choice, at: now }
       return choice
     }
     return undefined
+  }
+
+  private actsBesides(choice: string, now: number): boolean {
+    if (choice !== this.serverId && this.host.stillRunning?.() === true) {
+      return true
+    }
+    return this.seenPeers(now).some(({ peer, hello }) => peer.id !== choice && this.acts(hello))
   }
 
   private acts(hello: Hello): boolean {
@@ -616,10 +627,14 @@ export class Multihelm {
     return this.seenPeers(Date.now()).some(({ hello }) => this.acts(hello)) ? 'member' : 'master'
   }
 
-  /** This server would take over as the master, but may not be it now. */
-  takingOverWithout(): boolean {
-    const elected = this.elected()
-    return elected?.peer === null && elected.takingOver && this.role() !== 'master'
+  /** This server should be the master, but may not be it now. */
+  electedWithout(): boolean {
+    return this.elected()?.peer === null && this.role() !== 'master'
+  }
+
+  /** A server this one sees acts as the master, as it may while it stops the plugins there. */
+  otherActs(): boolean {
+    return this.seenPeers(Date.now()).some(({ hello }) => this.acts(hello))
   }
 
   /** The master to follow, once it acts as the master; null when this server is it or there is none. */

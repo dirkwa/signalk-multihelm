@@ -104,9 +104,12 @@ servers: each server votes for one server at a time and keeps that vote for
 a while after it last gave it, so two that share the reachable servers never
 both take over. The server set by hand gets the role back the same way, with most votes, so
 it waits until the servers between it and a standby have stopped voting for
-that one. A server takes over only once every paired server has heard of its place,
+that one. A server gives no vote while it, or a server it reaches, still
+acts as the master for another, so a master whose plugins will not stop holds
+up the handover even where the new one cannot reach it. A server takes over only once every paired server has heard of its place,
 so a master cut off before it was set does not keep acting beside it, and it
-stops the plugins that run on the master only as soon as it loses those votes.
+stops the plugins that run on the master only as soon as it loses those votes,
+as does any server that sees another acting.
 No server takes over while a
 paired server runs a Multihelm too old to say whether it acts. As soon as any server may
 take over, a server is the master only while it reaches most of the boat's
