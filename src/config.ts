@@ -62,6 +62,24 @@ export const ConfigSchema = Type.Object({
     description:
       'Every active alarm on the master also sounds here, and silencing or acknowledging an alarm here does it on the master and every other station. An alarm this server raises itself on the same path is not shown twice. Does nothing on the master, or on a server without the Notifications API or with notification management off.',
     default: true
+  }),
+  sharePaths: Type.Array(Type.String(), {
+    title: 'Share these paths with the other servers',
+    description:
+      'Paths only this server sees, such as `propulsion.*` from an engine bus of its own. The other servers show them under the source `multihelm.<this server>.<source>`.',
+    default: []
+  }),
+  shareConnections: Type.Array(Type.String(), {
+    title: 'Share everything from these connections with the other servers',
+    description:
+      'Data connections by their ID, such as an NMEA 2000 bus only this server is on: every value that comes in over one of them is shared, whatever its path.',
+    default: []
+  }),
+  takeSharedData: Type.Boolean({
+    title: 'Take the data the other servers share',
+    description:
+      'Paths and connections another server shares show here under the source `multihelm.<that server>.<source>`, so the source priorities can prefer a sensor of this server.',
+    default: true
   })
 })
 

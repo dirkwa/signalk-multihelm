@@ -23,9 +23,10 @@ sets by hand on one server (see `README.md`).
   resume, device access requests. `locatePeer()` works out, when pairing,
   the HTTPS address an HTTP one leads to and the certificate to trust a
   server by that no known CA vouches for; peers keep it as `ca`.
-- `routes.ts` — readonly `hello`/`manifest`/`file` and `master/*` via
-  `router.access`; admin `status`, `peers`, `paired-by`, `run`, `master-plugins`, `shared-plugins`. `hello`
-  notes the server asking, from its query.
+- `routes.ts` — readonly `hello`/`manifest`/`file`/`shared-data` and
+  `master/*` via `router.access`; admin `status`, `peers`, `paired-by`,
+  `run`, `master-plugins`, `shared-plugins`. `hello` notes the server
+  asking, from its query.
 - `master-proxy.ts` — `MasterProxy`: on a member, serves the master's GET
   answers under the prefixes plugins registered, with the pairing token.
 - `history-from-master.ts` — `MasterHistory`: on a member, a History API
@@ -60,6 +61,13 @@ sets by hand on one server (see `README.md`).
   plugin's `configuration`, read and written through `/plugins/<id>/config`
   with the own admin token. Only the server where a plugin was added offers
   it at first (`seed`); the others wait for a peer's copy.
+- `shared-data.ts` — data only one server sees, shared without a master:
+  `DataSharer` streams the values of the paths and connections set to be
+  shared as server-sent events at `shared-data` (latest per path and
+  source, once a second); `SharedDataReceiver` reads that stream from every
+  peer whose `hello` says `shares`, with the pairing token, and puts the
+  values in under `multihelm.<peer>.<source>`. Values under a `multihelm.`
+  source, or Multihelm's own, are never shared again.
 - `master-control.ts` — `MasterControlAccess`: this server's readwrite
   device token on the master, for the commands a station sends there; one
   request at a time, kept per master.
@@ -91,7 +99,7 @@ sets by hand on one server (see `README.md`).
 - **The `multihelm` PropertyValue and `api.ts` types.** Consumers act on the
   last value; `{ apiVersion: 1 }` without methods means stopped.
 - **Peer routes and their JSON** (`hello`, `manifest`, `file`,
-  `vessel-settings`) between
+  `vessel-settings`, `shared-data`) between
   servers that may run different Multihelm versions: grow by addition and
   bump `PROTOCOL` only for a breaking change. A server asking for `hello`
   says who it is in the query (`from`, `name`, `signalk`, `multihelm`),

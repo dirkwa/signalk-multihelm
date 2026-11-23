@@ -7,6 +7,8 @@ import {
   accessRequestsUrl,
   ago,
   approveAccessUrl,
+  connectionIds,
+  pathsFromText,
   peerName,
   roleNotice,
   unpairedServers,
@@ -49,7 +51,10 @@ function withDefaults(configuration: Settings | undefined): Required<Settings> {
     historyFromMaster: configuration?.historyFromMaster !== false,
     autopilotFromMaster: configuration?.autopilotFromMaster !== false,
     courseFromMaster: configuration?.courseFromMaster !== false,
-    alarmsFromMaster: configuration?.alarmsFromMaster !== false
+    alarmsFromMaster: configuration?.alarmsFromMaster !== false,
+    sharePaths: configuration?.sharePaths ?? [],
+    shareConnections: configuration?.shareConnections ?? [],
+    takeSharedData: configuration?.takeSharedData !== false
   }
 }
 
@@ -636,10 +641,25 @@ function PluginListCard({ title, description, name, current, onSaved }: PluginLi
   )
 }
 
-type Switch = Exclude<keyof Settings, 'takeOver'>
+type Switch = Exclude<keyof Settings, 'takeOver' | 'sharePaths' | 'shareConnections'>
 
 function SettingsCard({ configuration, save }: Props) {
   const [settings, setSettings] = useState(() => withDefaults(configuration))
+  const [pathsText, setPathsText] = useState(() => settings.sharePaths.join('\n'))
+  const [connections, setConnections] = useState<string[] | null>(null)
+  useEffect(() => {
+    call('/skServer/providers').then(
+      (raw) => {
+        setConnections(connectionIds(raw))
+      },
+      () => {
+        setConnections([])
+      }
+    )
+  }, [])
+  const listedConnections = [
+    ...new Set([...(connections ?? []), ...settings.shareConnections])
+  ].sort((a, b) => a.localeCompare(b))
   const set = (key: Switch, value: boolean): void => {
     setSettings((s) => ({ ...s, [key]: value }))
   }
@@ -749,11 +769,66 @@ function SettingsCard({ configuration, save }: Props) {
           'Silencing or acknowledging an alarm at any station does it at all the others. An alarm this server raises itself is not shown twice.',
           onMaster
         )}
+        <h6 className="mt-4">Data only this server sees</h6>
+        <div className="mb-3">
+          <label className="form-label" htmlFor="multihelm-sharePaths">
+            Share these paths with the other servers
+          </label>
+          <textarea
+            className="form-control font-monospace"
+            id="multihelm-sharePaths"
+            rows={3}
+            placeholder="propulsion.*"
+            value={pathsText}
+            onChange={(e) => {
+              setPathsText(e.target.value)
+            }}
+          />
+          <div className="form-text">
+            One path per line, <code>*</code> for any part, such as <code>propulsion.*</code> from
+            an engine bus of this server&apos;s own.
+          </div>
+        </div>
+        <div className="mb-3">
+          <div className="form-label">Share everything from these connections</div>
+          {connections === null && <div className="form-text">Loading the connections…</div>}
+          {listedConnections.map((id) => (
+            <div className="form-check" key={id}>
+              <input
+                className="form-check-input"
+                type="checkbox"
+                id={`multihelm-share-${id}`}
+                checked={settings.shareConnections.includes(id)}
+                onChange={(e) => {
+                  setSettings((s) => ({
+                    ...s,
+                    shareConnections: e.target.checked
+                      ? [...s.shareConnections, id]
+                      : s.shareConnections.filter((c) => c !== id)
+                  }))
+                }}
+              />
+              <label className="form-check-label" htmlFor={`multihelm-share-${id}`}>
+                {id}
+              </label>
+            </div>
+          ))}
+          <div className="form-text">
+            Every value that comes in over a connection ticked here goes to the other servers, such
+            as from an NMEA 2000 bus only this server is on. Only values: devices on it are still
+            operated from this server alone.
+          </div>
+        </div>
+        {option(
+          'takeSharedData',
+          'Take the data the other servers share',
+          'Values another server shares show here under the source multihelm.<that server>.<source>, so the source priorities can prefer a sensor of this server.'
+        )}
         <button
           type="button"
           className="btn btn-primary"
           onClick={() => {
-            save({ ...configuration, ...settings })
+            save({ ...configuration, ...settings, sharePaths: pathsFromText(pathsText) })
           }}
         >
           Save settings

@@ -31,17 +31,26 @@ import { MasterOnlyPlugins, PluginList, masterPluginsWanted } from './master-plu
 import { MasterHistory, canWithdrawHistoryProvider } from './history-from-master.js'
 import { MASTER_ROUTE, MasterProxy } from './master-proxy.js'
 import { Multihelm, ROUND_INTERVAL_MS } from './multihelm.js'
-import { ROUTE_PREFIX } from './peer-client.js'
+import { ROUTE_PREFIX, openStream } from './peer-client.js'
 import { registerRoutes } from './routes.js'
 import type { OwnAccessState } from './status.js'
 import { hasResourcesApi, resourceOfPath, resourcesDataset } from './resources-dataset.js'
 import { OwnServerAccess } from './own-access.js'
+import {
+  DataSharer,
+  SHARED_DATA_ROUTE,
+  SharedDataReceiver,
+  shareSettings,
+  type SharedUpdate
+} from './shared-data.js'
 import { SHARED_PLUGINS_DATASET, SHARED_PLUGINS_KEY, SharedPluginConfig } from './shared-config.js'
 import { MultihelmStore } from './store.js'
 import { sourcePrioritiesFromSettings } from './source-priorities.js'
 import { vesselSettingsFromDeltas, type VesselSettings } from './vessel-settings.js'
 
 const PLUGIN_ID = 'signalk-multihelm'
+/** A peer that begins to share is found by its `hello`, asked every 30 s. */
+const SHARED_DATA_CHECK_MS = 10_000
 
 /** The bundle and the sources both sit one folder below `package.json`. */
 function multihelmVersion(): string | undefined {
@@ -65,6 +74,9 @@ type Config = {
   autopilotFromMaster?: unknown
   courseFromMaster?: unknown
   alarmsFromMaster?: unknown
+  sharePaths?: unknown
+  shareConnections?: unknown
+  takeSharedData?: unknown
 }
 
 const APPROVE_HINT =
@@ -145,6 +157,7 @@ export default function (app: ServerAPI): Plugin {
   let masterPluginList: PluginList | null = null
   let sharedPlugins: { list: PluginList; config: SharedPluginConfig } | null = null
   let masterControl: MasterControlAccess | null = null
+  let dataSharer: DataSharer | null = null
 
   function localVesselSettings(): VesselSettings | null {
     const deltas = host.config?.baseDeltaEditor?.deltas
@@ -231,6 +244,62 @@ export default function (app: ServerAPI): Plugin {
     }
   }
 
+  /** Every value of this vessel, from every source, goes to the sharer as it comes in. */
+  function shareData(sharer: DataSharer): () => void {
+    const unsubscribes: Unsubscribes = []
+    ;(app.subscriptionmanager as SourcePolicySubscriptions).subscribe(
+      {
+        context: 'vessels.self' as Context,
+        subscribe: sharer.subscribePaths().map((p) => ({ path: p as Path, policy: 'instant' }))
+      },
+      unsubscribes,
+      (error) => {
+        app.error(`Multihelm: following the data to share: ${String(error)}`)
+      },
+      (delta) => {
+        for (const update of delta.updates) {
+          sharer.offer(update)
+        }
+      },
+      undefined,
+      'all'
+    )
+    return () => {
+      for (const unsubscribe of unsubscribes) {
+        unsubscribe()
+      }
+      sharer.stop()
+    }
+  }
+
+  function takeSharedData(mh: Multihelm): () => void {
+    const receiver = new SharedDataReceiver({
+      peers: () => mh.sharingPeers(),
+      open: (peer) => openStream(peer, SHARED_DATA_ROUTE, peer.token),
+      inject: (updates: SharedUpdate[]) => {
+        app.handleMessage(PLUGIN_ID, {
+          context: 'vessels.self' as Context,
+          updates
+        } as unknown as Parameters<ServerAPI['handleMessage']>[1])
+      },
+      debug: (msg) => {
+        app.debug(msg)
+      }
+    })
+    receiver.check()
+    const timer = setInterval(() => {
+      receiver.check()
+    }, SHARED_DATA_CHECK_MS)
+    const stopStatus = mh.onStatusChanged(() => {
+      receiver.check()
+    })
+    return () => {
+      clearInterval(timer)
+      stopStatus()
+      receiver.stop()
+    }
+  }
+
   function publish(value: MultihelmProperty): void {
     app.emitPropertyValue(PROPERTY_NAME, value)
   }
@@ -252,6 +321,13 @@ export default function (app: ServerAPI): Plugin {
         typeof settings.takeOver === 'number' && Number.isInteger(settings.takeOver)
           ? Math.max(0, settings.takeOver)
           : 0
+      const sharing = shareSettings(settings.sharePaths, settings.shareConnections)
+      const sharer = new DataSharer({
+        settings: sharing,
+        selfId: PLUGIN_ID,
+        meta: (p) => (app.getSelfPath(p) as { meta?: unknown } | undefined)?.meta
+      })
+      dataSharer = sharer
       const store = new MultihelmStore(app.getDataDirPath())
       const mh = new Multihelm(store, {
         serverName: () => os.hostname(),
@@ -259,6 +335,7 @@ export default function (app: ServerAPI): Plugin {
         standby: () => standby,
         stillRunning: () => masterPluginsRunHere(),
         versions: () => ({ signalk: host.config?.version, multihelm: multihelmVersion() }),
+        sharesData: () => sharer.shares(),
         debug: (msg) => {
           app.debug(msg)
         },
@@ -274,6 +351,12 @@ export default function (app: ServerAPI): Plugin {
       mh.start()
       const stopResources =
         settings.syncResources !== false && hasResourcesApi(app) ? syncResources(mh) : null
+      const stopSharing = sharer.shares()
+        ? shareData(sharer)
+        : () => {
+            sharer.stop()
+          }
+      const stopTaking = settings.takeSharedData !== false ? takeSharedData(mh) : null
       publish({
         apiVersion: API_VERSION,
         registerDataset: (definition) => mh.registerDataset(definition),
@@ -511,6 +594,8 @@ export default function (app: ServerAPI): Plugin {
         stopRoleHistory()
         history?.stop()
         stopResources?.()
+        stopSharing()
+        stopTaking?.()
       }
       stopRoleStatus = mh.onStatusChanged(showRole)
       showRole()
@@ -523,6 +608,7 @@ export default function (app: ServerAPI): Plugin {
       masterPluginList = null
       sharedPlugins = null
       masterControl = null
+      dataSharer = null
       stopRoleStatus?.()
       stopRoleStatus = null
       if (multihelm) {
@@ -546,7 +632,8 @@ export default function (app: ServerAPI): Plugin {
         ownAccessState,
         () => masterPluginList,
         () => masterControl?.waitingForApproval(multihelm?.role() === 'master') ?? null,
-        () => sharedPlugins
+        () => sharedPlugins,
+        () => dataSharer
       )
     }
   }

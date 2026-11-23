@@ -61,6 +61,8 @@ export interface Hello {
   signalk?: string
   /** Multihelm's version; older Multihelm versions leave it out. */
   multihelm?: string
+  /** It serves data of its own at `shared-data` for the other servers to take. */
+  shares?: boolean
 }
 
 /**
@@ -341,6 +343,7 @@ export async function fetchHello(
   const acting = (body as { acting?: unknown }).acting
   const elects = (body as { elects?: unknown }).elects
   const seesStandby = (body as { seesStandby?: unknown }).seesStandby
+  const shares = (body as { shares?: unknown }).shares
   return {
     ...hello,
     ...(typeof standby === 'number' && Number.isInteger(standby) && standby > 0 ? { standby } : {}),
@@ -350,7 +353,8 @@ export async function fetchHello(
       ? { seesStandby }
       : {}),
     ...(signalk ? { signalk } : {}),
-    ...(multihelm ? { multihelm } : {})
+    ...(multihelm ? { multihelm } : {}),
+    ...(shares === true ? { shares } : {})
   }
 }
 
@@ -359,6 +363,20 @@ export async function fetchVesselSettings(peer: PeerAddress, token: string): Pro
 }
 
 /** A request to a Signal K server's own REST API; throws on any status but 2xx. */
+/** A response read as it arrives; destroying `stream` ends it. */
+export async function openStream(
+  peer: PeerAddress,
+  route: string,
+  token: string
+): Promise<{ status: number; stream: http.IncomingMessage }> {
+  const res = await send('GET', `${peer.url}${ROUTE_PREFIX}${route}`, {
+    token,
+    ca: peer.ca,
+    headers: { Accept: 'text/event-stream' }
+  })
+  return { status: res.status, stream: res.stream }
+}
+
 export async function callServer(
   method: 'GET' | 'POST' | 'PUT' | 'DELETE',
   url: string,
