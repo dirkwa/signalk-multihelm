@@ -24,7 +24,7 @@ sets by hand on one server (see `README.md`).
   the HTTPS address an HTTP one leads to and the certificate to trust a
   server by that no known CA vouches for; peers keep it as `ca`.
 - `routes.ts` — readonly `hello`/`manifest`/`file` and `master/*` via
-  `router.access`; admin `status`, `peers`, `paired-by`, `run`. `hello`
+  `router.access`; admin `status`, `peers`, `paired-by`, `run`, `master-plugins`, `shared-plugins`. `hello`
   notes the server asking, from its query.
 - `master-proxy.ts` — `MasterProxy`: on a member, serves the master's GET
   answers under the prefixes plugins registered, with the pairing token.
@@ -50,10 +50,16 @@ sets by hand on one server (see `README.md`).
 - `own-access.ts` — `OwnServerAccess`: the admin device token on this
   server itself, asked for once, for what Multihelm writes through its REST
   API.
-- `master-plugins.ts` — the plugins that run on the master only: the list,
-  kept in step as the `signalk-multihelm/settings` dataset, and
+- `master-plugins.ts` — the plugins that run on the master only: the list
+  (`PluginList`), kept in step as the `signalk-multihelm/settings` dataset, and
   `MasterOnlyPlugins`, which switches them through `/plugins/<id>/config`
   once the role is known, and not at all while no master is found.
+- `shared-config.ts` — `SharedPluginConfig`: the
+  `signalk-multihelm/plugin-config` dataset, one entry per plugin on the
+  `signalk-multihelm/shared-plugins` list (a `PluginList`), its file the
+  plugin's `configuration`, read and written through `/plugins/<id>/config`
+  with the own admin token. Only the server where a plugin was added offers
+  it at first (`seed`); the others wait for a peer's copy.
 - `master-control.ts` — `MasterControlAccess`: this server's readwrite
   device token on the master, for the commands a station sends there; one
   request at a time, kept per master.

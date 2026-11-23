@@ -161,7 +161,20 @@ export default function PluginConfigurationPanel({ configuration, save }: Props)
           {status.role !== 'master' && status.pairedBy.length > 0 && (
             <PairedByCard status={status} busy={busy} onForget={forget} />
           )}
-          <MasterPluginsCard status={status} onSaved={refresh} />
+          <PluginListCard
+            title="Plugins that run on the master only"
+            description="These plugins run on the boat's master and are stopped on the other servers, for example an autopilot provider, so only one server sends its commands. The list is the same on every server; when another server becomes the master, they move there."
+            name="master-plugins"
+            current={status.masterPlugins}
+            onSaved={refresh}
+          />
+          <PluginListCard
+            title="Plugins with the same settings on every server"
+            description="The settings of these plugins, such as a buddy list, are kept the same on every server; whether a plugin runs stays each server's own. Add a plugin on the server that has the settings you want: the others take them over. After that, a change on any server goes to all."
+            name="shared-plugins"
+            current={status.sharedPlugins}
+            onSaved={refresh}
+          />
           <div className="card mb-3">
             <div className="card-header">Pair with another server</div>
             <div className="card-body">
@@ -505,7 +518,16 @@ function installedPlugins(raw: unknown): InstalledPlugin[] {
     .sort((a, b) => a.name.localeCompare(b.name))
 }
 
-function MasterPluginsCard({ status, onSaved }: { status: Status; onSaved: () => Promise<void> }) {
+interface PluginListProps {
+  title: string
+  description: string
+  /** The route that saves the list, and the prefix of the checkboxes' ids. */
+  name: 'master-plugins' | 'shared-plugins'
+  current: string[]
+  onSaved: () => Promise<void>
+}
+
+function PluginListCard({ title, description, name, current, onSaved }: PluginListProps) {
   const [plugins, setPlugins] = useState<InstalledPlugin[] | null>(null)
   const [chosen, setChosen] = useState<string[] | null>(null)
   const [unticked, setUnticked] = useState<string[]>([])
@@ -523,10 +545,9 @@ function MasterPluginsCard({ status, onSaved }: { status: Status; onSaved: () =>
     )
   }, [])
 
-  const selected = chosen ?? status.masterPlugins
-  const unchanged =
-    chosen === null || [...chosen].sort().join() === [...status.masterPlugins].sort().join()
-  const missing = [...new Set([...status.masterPlugins, ...selected, ...unticked])].filter(
+  const selected = chosen ?? current
+  const unchanged = chosen === null || [...chosen].sort().join() === [...current].sort().join()
+  const missing = [...new Set([...current, ...selected, ...unticked])].filter(
     (id) => !plugins?.some((p) => p.id === id)
   )
 
@@ -541,7 +562,7 @@ function MasterPluginsCard({ status, onSaved }: { status: Status; onSaved: () =>
     setSaving(true)
     setError(null)
     try {
-      await call(`${BASE}/master-plugins`, {
+      await call(`${BASE}/${name}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ plugins: selected })
@@ -558,27 +579,23 @@ function MasterPluginsCard({ status, onSaved }: { status: Status; onSaved: () =>
 
   return (
     <div className="card mb-3">
-      <div className="card-header">Plugins that run on the master only</div>
+      <div className="card-header">{title}</div>
       <div className="card-body">
-        <p className="small text-body-secondary">
-          These plugins run on the boat&apos;s master and are stopped on the other servers, for
-          example an autopilot provider, so only one server sends its commands. The list is the same
-          on every server; when another server becomes the master, they move there.
-        </p>
+        <p className="small text-body-secondary">{description}</p>
         {plugins === null && !error && <p className="text-body-secondary">Loading the plugins…</p>}
         {plugins?.map((plugin) => (
           <div className="form-check" key={plugin.id}>
             <input
               className="form-check-input"
               type="checkbox"
-              id={`multihelm-master-plugin-${plugin.id}`}
+              id={`multihelm-${name}-${plugin.id}`}
               checked={selected.includes(plugin.id)}
               disabled={saving}
               onChange={(e) => {
                 toggle(plugin.id, e.target.checked)
               }}
             />
-            <label className="form-check-label" htmlFor={`multihelm-master-plugin-${plugin.id}`}>
+            <label className="form-check-label" htmlFor={`multihelm-${name}-${plugin.id}`}>
               {plugin.name}
             </label>
           </div>
@@ -589,14 +606,14 @@ function MasterPluginsCard({ status, onSaved }: { status: Status; onSaved: () =>
               <input
                 className="form-check-input"
                 type="checkbox"
-                id={`multihelm-master-plugin-${id}`}
+                id={`multihelm-${name}-${id}`}
                 checked={selected.includes(id)}
                 disabled={saving}
                 onChange={(e) => {
                   toggle(id, e.target.checked)
                 }}
               />
-              <label className="form-check-label" htmlFor={`multihelm-master-plugin-${id}`}>
+              <label className="form-check-label" htmlFor={`multihelm-${name}-${id}`}>
                 {id} <span className="text-body-secondary">(not installed here)</span>
               </label>
             </div>

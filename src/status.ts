@@ -41,6 +41,8 @@ export interface Status {
   ownAccess: OwnAccessState
   /** The plugins that run on the boat's master only, the same on every server. */
   masterPlugins: string[]
+  /** The plugins whose settings are the same on every server. */
+  sharedPlugins: string[]
   /**
    * This server's request to send commands to the master's autopilot, while
    * it waits for approval on the master; `request` is its identifier there.
