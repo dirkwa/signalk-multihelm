@@ -213,7 +213,14 @@ describe('plugins with the same settings on every server', () => {
   it('does not write settings of a plugin taken off the list while it waited for another writer', async () => {
     plugins.set('buddies', { enabled: true, configuration: { buddies: [] } })
     let ids = ['buddies']
-    const here = shared(() => ids)
+    let checked = (): void => undefined
+    const firstCheck = new Promise<void>((resolve) => {
+      checked = resolve
+    })
+    const here = shared(() => {
+      checked()
+      return ids
+    })
     let release = (): void => undefined
     const other = exclusivePluginConfig('buddies', async () => {
       await new Promise<void>((resolve) => {
@@ -222,7 +229,7 @@ describe('plugins with the same settings on every server', () => {
     })
 
     const applying = here.config.dataset.apply(incoming('buddies', { buddies: [{ urn: 'f' }] }))
-    await new Promise((resolve) => setTimeout(resolve, 50))
+    await firstCheck
     ids = []
     release()
     await other
