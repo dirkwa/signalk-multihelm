@@ -96,6 +96,8 @@ describe('switching the plugins that run on the master only', () => {
   const plugins = new Map<string, PluginState>()
   const posts: { id: string; body: unknown }[] = []
   let security = false
+  /** The next status request waits for this before it answers. */
+  let holdNextStatus: Promise<void> | null = null
   const failing = new Set<string>()
   let own: { server: http.Server; url: string }
 
@@ -109,7 +111,10 @@ describe('switching the plugins that run on the master only', () => {
         res.sendStatus(404)
       }
     })
-    app.get('/plugins/:id', (req, res) => {
+    app.get('/plugins/:id', async (req, res) => {
+      const hold = holdNextStatus
+      holdNextStatus = null
+      await hold
       const plugin = plugins.get(req.params.id)
       if (!plugin) {
         res.sendStatus(404)
@@ -276,13 +281,22 @@ describe('switching the plugins that run on the master only', () => {
   it('writes no record once stopped, so a pass still running cannot undo the next start', async () => {
     const file = path.join(root, 'stopped', 'running.json')
     plugins.set('autopilot', { enabled: true })
+    let answer = (): void => undefined
+    holdNextStatus = new Promise((resolve) => {
+      answer = resolve
+    })
     const old = switcher('stopped', null, ['autopilot'], undefined, file)
+    const inFlight = old.applyOnce()
+    await vi.waitFor(() => {
+      expect(holdNextStatus).toBeNull()
+    })
     old.stop()
     const current = switcher('stopped', true, ['autopilot'], undefined, file)
     await current.applyOnce()
 
     plugins.set('autopilot', { enabled: false })
-    await old.applyOnce()
+    answer()
+    await inFlight
     expect(switcher('stopped', null, ['autopilot'], undefined, file).runsHere()).toBe(true)
   })
 
