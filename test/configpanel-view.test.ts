@@ -26,6 +26,7 @@ function status(over: Partial<Status> = {}): Status {
     discovered: [],
     ownAccess: null,
     masterPlugins: [],
+    sharedPlugins: [],
     controlAccess: null,
     ...over
   }

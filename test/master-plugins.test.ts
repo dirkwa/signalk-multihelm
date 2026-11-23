@@ -8,9 +8,10 @@ import express from 'express'
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest'
 
 import {
+  exclusivePluginConfig,
   MASTER_PLUGINS_KEY,
   MasterOnlyPlugins,
-  MasterPluginList,
+  PluginList,
   parsePluginIds,
   type SwitchHost
 } from '../src/master-plugins.js'
@@ -36,7 +37,7 @@ describe('the list of plugins that run on the master only', () => {
   it('is kept in a file that the dataset lists, and says when it changes', async () => {
     let changes = 0
     const dir = path.join(root, 'list')
-    const list = new MasterPluginList(dir, () => {
+    const list = new PluginList(dir, () => {
       changes++
     })
     expect(list.ids()).toEqual([])
@@ -51,11 +52,11 @@ describe('the list of plugins that run on the master only', () => {
       'autopilot',
       'rules'
     ])
-    expect(new MasterPluginList(dir, () => undefined).ids()).toEqual(['autopilot', 'rules'])
+    expect(new PluginList(dir, () => undefined).ids()).toEqual(['autopilot', 'rules'])
   })
 
   it('writes overlapping changes one after the other, the last one winning', async () => {
-    const list = new MasterPluginList(path.join(root, 'overlap'), () => undefined)
+    const list = new PluginList(path.join(root, 'overlap'), () => undefined)
     await Promise.all([list.set(['a']), list.set(['b']), list.set(['c'])])
     expect(list.ids()).toEqual(['c'])
     const [entry] = await list.dataset.list()
@@ -63,7 +64,7 @@ describe('the list of plugins that run on the master only', () => {
   })
 
   it("takes a peer's list, and refuses one that is not a list of plugin ids", async () => {
-    const list = new MasterPluginList(path.join(root, 'peer'), () => undefined)
+    const list = new PluginList(path.join(root, 'peer'), () => undefined)
     const incoming = path.join(root, 'incoming.json')
     const entry = (name = 'plugins.json') => ({
       key: MASTER_PLUGINS_KEY,
@@ -186,6 +187,24 @@ describe('switching the plugins that run on the master only', () => {
     await switcher('unknown', null, ['autopilot']).applyOnce()
     await switcher('self', false, ['signalk-multihelm']).applyOnce()
     expect(posts).toEqual([])
+  })
+
+  it("waits for another writer of the plugin's settings, and keeps what it changed", async () => {
+    plugins.set('autopilot', { enabled: true, configuration: { device: 'a' } })
+    let release = (): void => undefined
+    const other = exclusivePluginConfig('autopilot', async () => {
+      await new Promise<void>((resolve) => {
+        release = resolve
+      })
+      plugins.set('autopilot', { enabled: true, configuration: { device: 'b' } })
+    })
+    const switching = switcher('wait', false, ['autopilot']).applyOnce()
+    await new Promise((resolve) => setTimeout(resolve, 50))
+    expect(posts).toEqual([])
+    release()
+    await other
+    await switching
+    expect(plugins.get('autopilot')).toEqual({ enabled: false, configuration: { device: 'b' } })
   })
 
   it('skips a plugin not installed here', async () => {

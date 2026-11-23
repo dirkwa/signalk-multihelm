@@ -12,10 +12,11 @@
 import type { IRouter, Request, Response } from 'express'
 
 import type { DiscoveredServer } from './discovery.js'
-import { parsePluginIds, type MasterPluginList } from './master-plugins.js'
+import { parsePluginIds, type PluginList } from './master-plugins.js'
 import { MASTER_ROUTE, type MasterProxy } from './master-proxy.js'
 import type { Multihelm } from './multihelm.js'
 import type { HelloFrom } from './peer-client.js'
+import type { SharedPluginConfig } from './shared-config.js'
 import type { OwnAccessState, Status } from './status.js'
 import type { VesselSettings } from './vessel-settings.js'
 
@@ -69,8 +70,9 @@ export function registerRoutes(
   vesselSettings: () => VesselSettings | null = () => null,
   masterProxy: () => MasterProxy | null = () => null,
   ownAccess: () => OwnAccessState = () => null,
-  masterPlugins: () => MasterPluginList | null = () => null,
-  controlAccess: () => Status['controlAccess'] = () => null
+  masterPlugins: () => PluginList | null = () => null,
+  controlAccess: () => Status['controlAccess'] = () => null,
+  sharedPlugins: () => { list: PluginList; config: SharedPluginConfig } | null = () => null
 ): void {
   const scoped = (router as RouterWithAccess).access
   const available = typeof scoped === 'function'
@@ -187,6 +189,7 @@ export function registerRoutes(
       discovered: mh ? discovered() : [],
       ownAccess: mh ? ownAccess() : null,
       masterPlugins: masterPlugins()?.ids() ?? [],
+      sharedPlugins: sharedPlugins()?.list.ids() ?? [],
       controlAccess: mh ? controlAccess() : null
     }
     res.json(status)
@@ -224,23 +227,39 @@ export function registerRoutes(
     })
   )
 
-  router.put('/master-plugins', async (req: Request, res: Response) => {
+  const putPluginList = (
+    route: string,
+    lists: () => { list: PluginList; added?: (ids: string[]) => Promise<void> } | null
+  ): void => {
+    router.put(route, async (req: Request, res: Response) => {
+      const target = lists()
+      if (!target) {
+        res.status(503).json({ error: 'Multihelm is not running' })
+        return
+      }
+      const ids = parsePluginIds((req.body as { plugins?: unknown } | undefined)?.plugins)
+      if (!ids) {
+        res.status(400).json({ error: 'plugins must be a list of plugin ids' })
+        return
+      }
+      const before = target.list.ids()
+      try {
+        await target.list.set(ids)
+        await target.added?.(ids.filter((id) => !before.includes(id)))
+        res.json({ plugins: target.list.ids() })
+      } catch (error) {
+        res.status(500).json({ error: errorText(error) })
+      }
+    })
+  }
+
+  putPluginList('/master-plugins', () => {
     const list = masterPlugins()
-    if (!list) {
-      res.status(503).json({ error: 'Multihelm is not running' })
-      return
-    }
-    const ids = parsePluginIds((req.body as { plugins?: unknown } | undefined)?.plugins)
-    if (!ids) {
-      res.status(400).json({ error: 'plugins must be a list of plugin ids' })
-      return
-    }
-    try {
-      await list.set(ids)
-      res.json({ plugins: list.ids() })
-    } catch (error) {
-      res.status(500).json({ error: errorText(error) })
-    }
+    return list ? { list } : null
+  })
+  putPluginList('/shared-plugins', () => {
+    const shared = sharedPlugins()
+    return shared ? { list: shared.list, added: (ids) => shared.config.seed(ids) } : null
   })
 
   router.post(

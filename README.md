@@ -104,6 +104,23 @@ nothing is switched. While another server is the master, a plugin on the
 list turned on by hand here is turned off again within a minute. Switching uses the same admin access as
 taking the vessel settings over (see below), on the master too.
 
+## Plugins with the same settings on every server
+
+Some plugins keep everything in their plugin settings, such as
+signalk-buddylist-plugin with its buddy list. Tick them under **Plugins with
+the same settings on every server**, on the server whose settings you want
+to keep: that server offers them, and the others take them over. After that,
+a change made on any server goes to all of them within a round, with no
+master; two changes made at the same time end on the same one everywhere.
+The list itself is the same on every server.
+
+Only the plugin's own settings are shared. Whether it runs, and its logging,
+stay each server's own, and a server where the plugin is not installed takes
+nothing. Taking settings over restarts the plugin there, as saving them in
+the admin UI does, and uses the same admin access as the vessel settings
+(see below). Taking a plugin off the list leaves its settings on every
+server as they are.
+
 ## Vessel data, metadata and source priorities from the master
 
 The vessel is described once, on the master. The other servers take over its

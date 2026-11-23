@@ -17,8 +17,12 @@ import { PeerHttpError, callServer } from './peer-client.js'
 export const SETTINGS_DATASET = 'signalk-multihelm/settings'
 export const MASTER_PLUGINS_KEY = 'master-plugins'
 const FILE = 'plugins.json'
-const PLUGIN_ID = /^[\w.@-]{1,100}$/
+const PLUGIN_ID = /^[\w@-][\w.@-]{0,99}$/
 const MAX_PLUGINS = 100
+
+export function isPluginId(id: string): boolean {
+  return PLUGIN_ID.test(id)
+}
 
 export function parsePluginIds(raw: unknown): string[] | null {
   if (!Array.isArray(raw) || raw.length > MAX_PLUGINS) {
@@ -38,19 +42,23 @@ function errorText(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
 }
 
-/** The list, kept in a file of its own under `dir`, since a dataset entry is made of files. */
-export class MasterPluginList {
+/** A list of plugins the same on every server, kept in a file of its own under `dir`, since a dataset entry is made of files. */
+export class PluginList {
   private readonly file: string
   private current: string[]
   /** Writes one after the other, so two cannot share the temporary file or publish out of order. */
   private writes: Promise<unknown> = Promise.resolve()
+  readonly dataset: DatasetDefinition
 
   constructor(
     dir: string,
-    private readonly onChange: () => void
+    private readonly onChange: () => void,
+    private readonly datasetId = SETTINGS_DATASET,
+    private readonly key = MASTER_PLUGINS_KEY
   ) {
     this.file = path.join(dir, FILE)
     this.current = this.read()
+    this.dataset = this.define()
   }
 
   ids(): string[] {
@@ -61,44 +69,46 @@ export class MasterPluginList {
     return this.queued(() => this.write(ids))
   }
 
-  readonly dataset: DatasetDefinition = {
-    id: SETTINGS_DATASET,
-    isValidKey: (key) => key === MASTER_PLUGINS_KEY,
+  private define(): DatasetDefinition {
+    return {
+      id: this.datasetId,
+      isValidKey: (key) => key === this.key,
 
-    list: async (): Promise<DatasetEntry[]> => {
-      let stat: fs.Stats
-      try {
-        stat = await fs.promises.stat(this.file)
-      } catch {
-        return []
-      }
-      return [
-        {
-          key: MASTER_PLUGINS_KEY,
-          meta: null,
-          files: [{ name: FILE, path: this.file, size: stat.size, mtimeMs: stat.mtimeMs }]
+      list: async (): Promise<DatasetEntry[]> => {
+        let stat: fs.Stats
+        try {
+          stat = await fs.promises.stat(this.file)
+        } catch {
+          return []
         }
-      ]
-    },
+        return [
+          {
+            key: this.key,
+            meta: null,
+            files: [{ name: FILE, path: this.file, size: stat.size, mtimeMs: stat.mtimeMs }]
+          }
+        ]
+      },
 
-    apply: async (entry: IncomingEntry): Promise<void> => {
-      const file = entry.files.find((f) => f.name === FILE)
-      if (!file || entry.files.length !== 1) {
-        throw new Error(`the plugin list has one file, ${String(entry.files.length)} came`)
-      }
-      const ids = parsePluginIds(JSON.parse(await fs.promises.readFile(file.path, 'utf8')))
-      if (!ids) {
-        throw new Error('not a list of plugin ids')
-      }
-      await this.queued(() => this.write(ids))
-    },
+      apply: async (entry: IncomingEntry): Promise<void> => {
+        const file = entry.files.find((f) => f.name === FILE)
+        if (!file || entry.files.length !== 1) {
+          throw new Error(`the plugin list has one file, ${String(entry.files.length)} came`)
+        }
+        const ids = parsePluginIds(JSON.parse(await fs.promises.readFile(file.path, 'utf8')))
+        if (!ids) {
+          throw new Error('not a list of plugin ids')
+        }
+        await this.queued(() => this.write(ids))
+      },
 
-    remove: async (): Promise<boolean> => {
-      await this.queued(async () => {
-        await fs.promises.rm(this.file, { force: true })
-        this.changed([])
-      })
-      return true
+      remove: async (): Promise<boolean> => {
+        await this.queued(async () => {
+          await fs.promises.rm(this.file, { force: true })
+          this.changed([])
+        })
+        return true
+      }
     }
   }
 
@@ -159,6 +169,21 @@ export interface SwitchHost {
   error: (msg: string) => void
 }
 
+const configWrites = new Map<string, Promise<unknown>>()
+
+/** One read-modify-write of a plugin's settings at a time, so no writer restores what another just changed. */
+export function exclusivePluginConfig<T>(id: string, work: () => Promise<T>): Promise<T> {
+  const result = (configWrites.get(id) ?? Promise.resolve()).then(work)
+  const settled = result.catch(() => undefined)
+  configWrites.set(id, settled)
+  void settled.then(() => {
+    if (configWrites.get(id) === settled) {
+      configWrites.delete(id)
+    }
+  })
+  return result
+}
+
 function pluginUrl(base: string, id: string, rest = ''): string {
   return `${base}/plugins/${encodeURIComponent(id)}${rest}`
 }
@@ -208,22 +233,28 @@ export class MasterOnlyPlugins {
         if ((state as { enabled?: unknown } | null)?.enabled === wanted) {
           continue
         }
-        const options = await callServer('GET', pluginUrl(base, id, '/config'), token)
-        // The role or the list may have moved during the requests; the next pass follows them.
-        if (this.host.wanted() !== wanted) {
+        const roleMoved = await exclusivePluginConfig(id, async () => {
+          const options = await callServer('GET', pluginUrl(base, id, '/config'), token)
+          // The role or the list may have moved during the requests; the next pass follows them.
+          if (this.host.wanted() !== wanted) {
+            return true
+          }
+          if (!this.host.ids().includes(id)) {
+            return false
+          }
+          const body =
+            typeof options === 'object' && options !== null && !Array.isArray(options)
+              ? { ...options, enabled: wanted }
+              : { enabled: wanted }
+          await callServer('POST', pluginUrl(base, id, '/config'), token, body)
+          this.host.debug(
+            `Multihelm: ${wanted ? 'started' : 'stopped'} ${id}, which runs on the master only`
+          )
+          return false
+        })
+        if (roleMoved) {
           return
         }
-        if (!this.host.ids().includes(id)) {
-          continue
-        }
-        const body =
-          typeof options === 'object' && options !== null && !Array.isArray(options)
-            ? { ...options, enabled: wanted }
-            : { enabled: wanted }
-        await callServer('POST', pluginUrl(base, id, '/config'), token, body)
-        this.host.debug(
-          `Multihelm: ${wanted ? 'started' : 'stopped'} ${id}, which runs on the master only`
-        )
       } catch (error) {
         if (error instanceof PeerHttpError && error.status === 404) {
           this.host.debug(`Multihelm: ${id}, set to run on the master only, is not installed here`)

@@ -27,7 +27,7 @@ import { MasterCourse } from './course-from-master.js'
 import { ServerDiscovery } from './discovery.js'
 import { ConfigSchema } from './config.js'
 import { MasterFollower } from './follow-master.js'
-import { MasterOnlyPlugins, MasterPluginList } from './master-plugins.js'
+import { MasterOnlyPlugins, PluginList } from './master-plugins.js'
 import { MasterHistory, canWithdrawHistoryProvider } from './history-from-master.js'
 import { MASTER_ROUTE, MasterProxy } from './master-proxy.js'
 import { Multihelm, ROUND_INTERVAL_MS } from './multihelm.js'
@@ -36,6 +36,7 @@ import { registerRoutes } from './routes.js'
 import type { OwnAccessState } from './status.js'
 import { hasResourcesApi, resourceOfPath, resourcesDataset } from './resources-dataset.js'
 import { OwnServerAccess } from './own-access.js'
+import { SHARED_PLUGINS_DATASET, SHARED_PLUGINS_KEY, SharedPluginConfig } from './shared-config.js'
 import { MultihelmStore } from './store.js'
 import { sourcePrioritiesFromSettings } from './source-priorities.js'
 import { vesselSettingsFromDeltas, type VesselSettings } from './vessel-settings.js'
@@ -130,7 +131,8 @@ export default function (app: ServerAPI): Plugin {
   let stopRoleStatus: (() => void) | null = null
   let stopFollowing: (() => void) | null = null
   let ownAccess: OwnServerAccess | null = null
-  let masterPluginList: MasterPluginList | null = null
+  let masterPluginList: PluginList | null = null
+  let sharedPlugins: { list: PluginList; config: SharedPluginConfig } | null = null
   let masterControl: MasterControlAccess | null = null
 
   function localVesselSettings(): VesselSettings | null {
@@ -289,15 +291,37 @@ export default function (app: ServerAPI): Plugin {
           app.error(msg)
         }
       })
-      const pluginList = new MasterPluginList(
-        path.join(app.getDataDirPath(), 'master-plugins'),
-        () => {
-          masterPlugins.apply()
-          settingsHandle.changed()
-        }
-      )
+      const pluginList = new PluginList(path.join(app.getDataDirPath(), 'master-plugins'), () => {
+        masterPlugins.apply()
+        settingsHandle.changed()
+      })
       const settingsHandle = mh.registerDataset(pluginList.dataset)
       masterPluginList = pluginList
+      const sharedConfig = new SharedPluginConfig({
+        ids: () => sharedList.ids(),
+        access,
+        ownUrl,
+        selfId: PLUGIN_ID,
+        dir: path.join(app.getDataDirPath(), 'plugin-config'),
+        debug: (msg) => {
+          app.debug(msg)
+        },
+        error: (msg) => {
+          app.error(msg)
+        }
+      })
+      const sharedList = new PluginList(
+        path.join(app.getDataDirPath(), 'shared-plugins'),
+        () => {
+          sharedListHandle.changed()
+          sharedConfigHandle.changed()
+        },
+        SHARED_PLUGINS_DATASET,
+        SHARED_PLUGINS_KEY
+      )
+      const sharedListHandle = mh.registerDataset(sharedList.dataset)
+      const sharedConfigHandle = mh.registerDataset(sharedConfig.dataset)
+      sharedPlugins = { list: sharedList, config: sharedConfig }
       const pluginsTimer = setInterval(() => {
         masterPlugins.apply()
       }, ROUND_INTERVAL_MS)
@@ -474,6 +498,7 @@ export default function (app: ServerAPI): Plugin {
       stopFollowing = null
       ownAccess = null
       masterPluginList = null
+      sharedPlugins = null
       masterControl = null
       stopRoleStatus?.()
       stopRoleStatus = null
@@ -497,7 +522,8 @@ export default function (app: ServerAPI): Plugin {
         () => masterProxy,
         ownAccessState,
         () => masterPluginList,
-        () => masterControl?.waitingForApproval(multihelm?.role() === 'master') ?? null
+        () => masterControl?.waitingForApproval(multihelm?.role() === 'master') ?? null,
+        () => sharedPlugins
       )
     }
   }
