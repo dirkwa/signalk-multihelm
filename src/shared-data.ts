@@ -23,6 +23,8 @@ export const HEARTBEAT_MS = 15_000
 export const RECONNECT_MIN_MS = 5_000
 const RECONNECT_MAX_MS = 60_000
 const MAX_EVENT_LENGTH = 1_000_000
+/** Events are sent in pieces this size, well within what a receiver takes. */
+const SENT_EVENT_LENGTH = 200_000
 /** A peer that lets this much pile up unread is dropped; it opens the stream again. */
 export const MAX_QUEUED_BYTES = 1_000_000
 /** Of a path's metadata, what a server needs to show a value it does not know. */
@@ -89,7 +91,8 @@ export function sharedSource(server: { id: string; name: string }, source: strin
 
 interface Client {
   res: Response
-  metaSent: Set<string>
+  /** Path → the metadata last sent for it on this stream. */
+  metaSent: Map<string, string>
 }
 
 export interface SharerHost {
@@ -100,7 +103,7 @@ export interface SharerHost {
   meta: (path: string) => unknown
 }
 
-interface SharedValue {
+export interface SharedValue {
   $source: string
   timestamp: string
   path: string
@@ -120,6 +123,52 @@ function grouped(values: Iterable<SharedValue>): SharedUpdate[] {
     update.values.push({ path, value })
   }
   return [...updates.values()]
+}
+
+/**
+ * The updates as events of at most `SENT_EVENT_LENGTH`; an update too long
+ * goes one value at a time, and a single value too long for any event is
+ * left out, since no receiver would take it.
+ */
+export function events(updates: SharedUpdate[]): string[] {
+  const out: string[] = []
+  let batch: string[] = []
+  let length = 0
+  const close = (): void => {
+    if (batch.length > 0) {
+      out.push(`data: {"updates":[${batch.join(',')}]}\n\n`)
+      batch = []
+      length = 0
+    }
+  }
+  const add = (text: string): void => {
+    if (length + text.length > SENT_EVENT_LENGTH) {
+      close()
+    }
+    batch.push(text)
+    length += text.length + 1
+  }
+  for (const update of updates) {
+    const text = JSON.stringify(update)
+    if (text.length <= SENT_EVENT_LENGTH) {
+      add(text)
+      continue
+    }
+    for (const v of update.values) {
+      const meta = update.meta?.filter((m) => m.path === v.path) ?? []
+      const one = JSON.stringify({
+        $source: update.$source,
+        timestamp: update.timestamp,
+        values: [v],
+        ...(meta.length > 0 ? { meta } : {})
+      })
+      if (one.length <= SENT_EVENT_LENGTH) {
+        add(one)
+      }
+    }
+  }
+  close()
+  return out
 }
 
 /** The serving side: collects the values to share and streams them to every peer reading. */
@@ -203,13 +252,14 @@ export class DataSharer {
     })
     res.flushHeaders()
     res.write(':\n\n')
-    const client: Client = { res, metaSent: new Set() }
+    const client: Client = { res, metaSent: new Map() }
     this.clients.add(client)
     req.on('close', () => {
       this.clients.delete(client)
     })
     if (this.latest.size > 0) {
-      this.sendUpdates(client, grouped(this.latest.values()))
+      // The replay is no more than what this server keeps anyway, so it is not held to the queue limit.
+      this.sendUpdates(client, grouped(this.latest.values()), true)
     }
   }
 
@@ -225,18 +275,17 @@ export class DataSharer {
     }
   }
 
-  private sendUpdates(client: Client, updates: SharedUpdate[]): void {
-    const delta = { updates: updates.map((u) => this.withMeta(u, client.metaSent)) }
-    this.send(client, `data: ${JSON.stringify(delta)}\n\n`)
+  private sendUpdates(client: Client, updates: SharedUpdate[], replay = false): void {
+    const pieces = updates.map((u) => this.withMeta(u, client.metaSent))
+    for (const event of events(pieces)) {
+      this.send(client, event, replay)
+    }
   }
 
-  /** A path's metadata goes along with its first value on each stream that has some. */
-  private withMeta(update: SharedUpdate, sent: Set<string>): SharedUpdate {
+  /** A path's metadata goes along with a value whenever it differs from what this stream last got. */
+  private withMeta(update: SharedUpdate, sent: Map<string, string>): SharedUpdate {
     const meta: NonNullable<SharedUpdate['meta']> = []
     for (const { path } of update.values) {
-      if (sent.has(path)) {
-        continue
-      }
       const known = this.host.meta(path)
       if (!isPlainObject(known)) {
         continue
@@ -247,8 +296,9 @@ export class DataSharer {
           value[field] = known[field]
         }
       }
-      if (Object.keys(value).length > 0) {
-        sent.add(path)
+      const text = JSON.stringify(value)
+      if (Object.keys(value).length > 0 && sent.get(path) !== text) {
+        sent.set(path, text)
         meta.push({ path, value })
       }
     }
@@ -261,8 +311,8 @@ export class DataSharer {
     }
   }
 
-  private send(client: Client, text: string): void {
-    if (client.res.writableLength > MAX_QUEUED_BYTES) {
+  private send(client: Client, text: string, replay = false): void {
+    if (!replay && client.res.writableLength > MAX_QUEUED_BYTES) {
       this.clients.delete(client)
       client.res.destroy()
       return
@@ -348,19 +398,43 @@ function hasFreshOwnSource(node: unknown, now: number): boolean {
   )
 }
 
-/** Leaves out the values this server has a fresh source of its own for, and metadata it has already. */
+/** The fields of `meta` this server has no metadata for yet. */
+function missingMeta(
+  meta: NonNullable<SharedUpdate['meta']>,
+  local: (path: string) => unknown
+): NonNullable<SharedUpdate['meta']> {
+  const missing: NonNullable<SharedUpdate['meta']> = []
+  for (const { path, value } of meta) {
+    const node = local(path)
+    const own = isPlainObject(node) && isPlainObject(node.meta) ? node.meta : {}
+    const fields = Object.entries(value).filter(([field]) => own[field] === undefined)
+    if (fields.length > 0) {
+      missing.push({ path, value: Object.fromEntries(fields) })
+    }
+  }
+  return missing
+}
+
+/**
+ * Leaves out the values this server has a fresh source of its own for, each
+ * handed to `held`, and the metadata fields it has already.
+ */
 export function withoutOwn(
   updates: SharedUpdate[],
   local: (path: string) => unknown,
-  now: number
+  now: number,
+  held: (value: SharedValue) => void = () => undefined
 ): SharedUpdate[] {
   const kept: SharedUpdate[] = []
   for (const update of updates) {
-    const values = update.values.filter((v) => !hasFreshOwnSource(local(v.path), now))
-    const meta = (update.meta ?? []).filter((m) => {
-      const node = local(m.path)
-      return !isPlainObject(node) || !isPlainObject(node.meta)
+    const values = update.values.filter((v) => {
+      if (!hasFreshOwnSource(local(v.path), now)) {
+        return true
+      }
+      held({ $source: update.$source, timestamp: update.timestamp, path: v.path, value: v.value })
+      return false
     })
+    const meta = missingMeta(update.meta ?? [], local)
     if (values.length > 0 || meta.length > 0) {
       kept.push({
         $source: update.$source,
@@ -391,11 +465,17 @@ interface Reading {
 /** The taking side: one stream from each peer that shares, opened again after it ends. */
 export class SharedDataReceiver {
   private readonly readings = new Map<string, Reading>()
+  /** Peer id → the last values held back for a fresh source of this server's own, to stand in once it is quiet. */
+  private readonly held = new Map<string, Map<string, SharedValue>>()
 
   constructor(private readonly host: ReceiverHost) {}
 
-  /** Opens streams to peers that began to share, and closes those of peers that stopped or moved. */
+  /**
+   * Opens streams to peers that began to share, closes those of peers that
+   * stopped or moved, and puts in held values whose own source went quiet.
+   */
   check(): void {
+    this.standIn()
     const wanted = new Map(this.host.peers().map((p) => [p.id, p]))
     for (const [id, reading] of this.readings) {
       const peer = wanted.get(id)
@@ -417,7 +497,23 @@ export class SharedDataReceiver {
     }
   }
 
+  private standIn(): void {
+    const now = Date.now()
+    for (const values of this.held.values()) {
+      const due = [...values.entries()].filter(
+        ([, v]) => !hasFreshOwnSource(this.host.local(v.path), now)
+      )
+      for (const [key] of due) {
+        values.delete(key)
+      }
+      if (due.length > 0) {
+        this.host.inject(grouped(due.map(([, v]) => v)))
+      }
+    }
+  }
+
   private close(id: string, reading: Reading): void {
+    this.held.delete(id)
     reading.stopped = true
     reading.stream?.destroy()
     this.readings.delete(id)
@@ -438,6 +534,7 @@ export class SharedDataReceiver {
         if (status === 200) {
           this.host.debug(`Multihelm: taking the data ${reading.peer.name} shares`)
           await this.consume(reading.peer, stream)
+          this.held.delete(reading.peer.id)
           wait = RECONNECT_MIN_MS
         } else {
           stream.resume()
@@ -497,7 +594,20 @@ export class SharedDataReceiver {
     } catch {
       return
     }
-    const updates = withoutOwn(relabel(peer, delta), this.host.local, Date.now())
+    let held = this.held.get(peer.id)
+    if (!held) {
+      held = new Map()
+      this.held.set(peer.id, held)
+    }
+    const peerHeld = held
+    const updates = withoutOwn(relabel(peer, delta), this.host.local, Date.now(), (v) => {
+      peerHeld.set(`${v.$source}\n${v.path}`, v)
+    })
+    for (const update of updates) {
+      for (const { path } of update.values) {
+        peerHeld.delete(`${update.$source}\n${path}`)
+      }
+    }
     if (updates.length > 0) {
       this.host.inject(updates)
     }

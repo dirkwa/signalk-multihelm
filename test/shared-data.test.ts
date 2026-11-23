@@ -17,6 +17,7 @@ import {
   pathMatcher,
   relabel,
   withoutOwn,
+  events,
   OWN_SOURCE_FRESH_MS,
   sharedSource,
   shareSettings,
@@ -419,5 +420,95 @@ describe('data only one server sees', () => {
     r.check()
     await until(() => got.length === 1)
     expect(got[0]?.values).toEqual([{ path: 'tanks.fuel.0.currentLevel', value: 0.45 }])
+  })
+
+  it('stands in with a value it held back once its own source went quiet, without a new one coming', async () => {
+    const s = await station('stand-in', { paths: ['tanks.*'], connections: [] })
+    let own = { value: 0.3, $source: 'tank.local', timestamp: new Date().toISOString() }
+    const got: SharedUpdate[] = []
+    const r = new SharedDataReceiver({
+      peers: () => [{ id: 'h', name: 'h', url: s.url, token: '' }],
+      open: (peer) => openStream(peer, SHARED_DATA_ROUTE, peer.token),
+      inject: (updates) => {
+        got.push(...updates)
+      },
+      local: () => own,
+      debug: () => undefined
+    })
+    receivers.push(r)
+    r.check()
+    await new Promise((resolve) => setTimeout(resolve, 100))
+    s.sharer.offer(value('tank.1', 'tanks.fuel.0.currentLevel', 0.4))
+    s.sharer.flush()
+    await new Promise((resolve) => setTimeout(resolve, 100))
+    r.check()
+    expect(got).toEqual([])
+    own = { ...own, timestamp: new Date(Date.now() - OWN_SOURCE_FRESH_MS - 1000).toISOString() }
+    r.check()
+    expect(got.map((u) => u.values)).toEqual([[{ path: 'tanks.fuel.0.currentLevel', value: 0.4 }]])
+    r.check()
+    expect(got).toHaveLength(1)
+  })
+
+  it('takes the metadata fields it lacks, and sends fields that turn up later', async () => {
+    const now = Date.parse(T)
+    const kept = withoutOwn(
+      [
+        {
+          $source: 'multihelm.p-1.a',
+          timestamp: T,
+          values: [],
+          meta: [{ path: 'tank', value: { units: 'ratio', displayName: 'Fuel' } }]
+        }
+      ],
+      () => ({ meta: { displayName: 'Diesel' } }),
+      now
+    )
+    expect(kept[0]?.meta).toEqual([{ path: 'tank', value: { units: 'ratio' } }])
+
+    const s = await station('meta-later', { paths: ['tanks.*'], connections: [] })
+    s.meta.set('tanks.fuel.0.currentLevel', { displayName: 'Fuel' })
+    const { r, got } = receiver(() => [{ id: 'l', name: 'l', url: s.url, token: '' }])
+    receivers.push(r)
+    r.check()
+    await new Promise((resolve) => setTimeout(resolve, 100))
+    for (const [v, meta] of [
+      [0.5, undefined],
+      [0.49, { displayName: 'Fuel', units: 'ratio' }],
+      [0.48, undefined]
+    ] as const) {
+      if (meta) {
+        s.meta.set('tanks.fuel.0.currentLevel', meta)
+      }
+      s.sharer.offer(value('tank.1', 'tanks.fuel.0.currentLevel', v))
+      s.sharer.flush()
+      const before = got.length
+      await until(() => got.length > before)
+    }
+    expect(got.map((u) => u.meta?.[0]?.value)).toEqual([
+      { displayName: 'Fuel' },
+      { displayName: 'Fuel', units: 'ratio' },
+      undefined
+    ])
+  })
+
+  it('sends long batches in pieces a receiver takes', () => {
+    const big = 'x'.repeat(60_000)
+    const updates: SharedUpdate[] = [
+      {
+        $source: 's',
+        timestamp: T,
+        values: Array.from({ length: 20 }, (_, i) => ({ path: `p.${String(i)}`, value: big }))
+      },
+      { $source: 's', timestamp: T, values: [{ path: 'too.long', value: 'y'.repeat(300_000) }] }
+    ]
+    const out = events(updates)
+    expect(out.every((e) => e.length < 210_000)).toBe(true)
+    const paths = out.flatMap((e) =>
+      (JSON.parse(e.slice(6)) as { updates: SharedUpdate[] }).updates.flatMap((u) =>
+        u.values.map((v) => v.path)
+      )
+    )
+    expect(paths).toEqual(Array.from({ length: 20 }, (_, i) => `p.${String(i)}`))
   })
 })
