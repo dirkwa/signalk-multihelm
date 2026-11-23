@@ -169,6 +169,21 @@ export interface SwitchHost {
   error: (msg: string) => void
 }
 
+const configWrites = new Map<string, Promise<unknown>>()
+
+/** One read-modify-write of a plugin's settings at a time, so no writer restores what another just changed. */
+export function exclusivePluginConfig<T>(id: string, work: () => Promise<T>): Promise<T> {
+  const result = (configWrites.get(id) ?? Promise.resolve()).then(work)
+  const settled = result.catch(() => undefined)
+  configWrites.set(id, settled)
+  void settled.then(() => {
+    if (configWrites.get(id) === settled) {
+      configWrites.delete(id)
+    }
+  })
+  return result
+}
+
 function pluginUrl(base: string, id: string, rest = ''): string {
   return `${base}/plugins/${encodeURIComponent(id)}${rest}`
 }
@@ -218,22 +233,28 @@ export class MasterOnlyPlugins {
         if ((state as { enabled?: unknown } | null)?.enabled === wanted) {
           continue
         }
-        const options = await callServer('GET', pluginUrl(base, id, '/config'), token)
-        // The role or the list may have moved during the requests; the next pass follows them.
-        if (this.host.wanted() !== wanted) {
+        const roleMoved = await exclusivePluginConfig(id, async () => {
+          const options = await callServer('GET', pluginUrl(base, id, '/config'), token)
+          // The role or the list may have moved during the requests; the next pass follows them.
+          if (this.host.wanted() !== wanted) {
+            return true
+          }
+          if (!this.host.ids().includes(id)) {
+            return false
+          }
+          const body =
+            typeof options === 'object' && options !== null && !Array.isArray(options)
+              ? { ...options, enabled: wanted }
+              : { enabled: wanted }
+          await callServer('POST', pluginUrl(base, id, '/config'), token, body)
+          this.host.debug(
+            `Multihelm: ${wanted ? 'started' : 'stopped'} ${id}, which runs on the master only`
+          )
+          return false
+        })
+        if (roleMoved) {
           return
         }
-        if (!this.host.ids().includes(id)) {
-          continue
-        }
-        const body =
-          typeof options === 'object' && options !== null && !Array.isArray(options)
-            ? { ...options, enabled: wanted }
-            : { enabled: wanted }
-        await callServer('POST', pluginUrl(base, id, '/config'), token, body)
-        this.host.debug(
-          `Multihelm: ${wanted ? 'started' : 'stopped'} ${id}, which runs on the master only`
-        )
       } catch (error) {
         if (error instanceof PeerHttpError && error.status === 404) {
           this.host.debug(`Multihelm: ${id}, set to run on the master only, is not installed here`)

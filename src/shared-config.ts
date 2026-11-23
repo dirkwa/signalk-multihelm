@@ -15,7 +15,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 
 import type { DatasetDefinition, DatasetEntry, IncomingEntry } from './api.js'
-import { isPluginId } from './master-plugins.js'
+import { exclusivePluginConfig, isPluginId } from './master-plugins.js'
 import type { OwnServerAccess } from './own-access.js'
 import { PeerHttpError, callServer } from './peer-client.js'
 
@@ -80,6 +80,9 @@ export class SharedPluginConfig {
     list: async (): Promise<DatasetEntry[]> => {
       const shared = this.shared()
       await this.forgetUnshared(shared)
+      if (shared.length === 0) {
+        return []
+      }
       const token = await this.host.access.token()
       const entries: DatasetEntry[] = []
       for (const id of shared) {
@@ -118,21 +121,27 @@ export class SharedPluginConfig {
         throw new Error("this server's own access request is not approved yet")
       }
       const url = pluginConfigUrl(this.host.ownUrl(), entry.key)
-      let options: unknown
-      try {
-        options = await callServer('GET', url, token)
-      } catch (error) {
-        if (error instanceof PeerHttpError && error.status === 404) {
-          // Declined: listing nothing for it, this server does not offer settings it never used.
-          this.host.debug(`Multihelm: ${entry.key}, with shared settings, is not installed here`)
-          return
+      const installed = await exclusivePluginConfig(entry.key, async () => {
+        let options: unknown
+        try {
+          options = await callServer('GET', url, token)
+        } catch (error) {
+          if (error instanceof PeerHttpError && error.status === 404) {
+            return false
+          }
+          throw error
         }
-        throw error
-      }
-      await callServer('POST', url, token, {
-        ...(isPlainObject(options) ? options : {}),
-        configuration
+        await callServer('POST', url, token, {
+          ...(isPlainObject(options) ? options : {}),
+          configuration
+        })
+        return true
       })
+      if (!installed) {
+        // Declined: listing nothing for it, this server does not offer settings it never used.
+        this.host.debug(`Multihelm: ${entry.key}, with shared settings, is not installed here`)
+        return
+      }
       await this.writeCopy(entry.key, JSON.stringify(configuration))
       this.host.debug(`Multihelm: took over the shared settings of ${entry.key}`)
     },

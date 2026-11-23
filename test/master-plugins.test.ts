@@ -8,6 +8,7 @@ import express from 'express'
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest'
 
 import {
+  exclusivePluginConfig,
   MASTER_PLUGINS_KEY,
   MasterOnlyPlugins,
   PluginList,
@@ -186,6 +187,24 @@ describe('switching the plugins that run on the master only', () => {
     await switcher('unknown', null, ['autopilot']).applyOnce()
     await switcher('self', false, ['signalk-multihelm']).applyOnce()
     expect(posts).toEqual([])
+  })
+
+  it("waits for another writer of the plugin's settings, and keeps what it changed", async () => {
+    plugins.set('autopilot', { enabled: true, configuration: { device: 'a' } })
+    let release = (): void => undefined
+    const other = exclusivePluginConfig('autopilot', async () => {
+      await new Promise<void>((resolve) => {
+        release = resolve
+      })
+      plugins.set('autopilot', { enabled: true, configuration: { device: 'b' } })
+    })
+    const switching = switcher('wait', false, ['autopilot']).applyOnce()
+    await new Promise((resolve) => setTimeout(resolve, 50))
+    expect(posts).toEqual([])
+    release()
+    await other
+    await switching
+    expect(plugins.get('autopilot')).toEqual({ enabled: false, configuration: { device: 'b' } })
   })
 
   it('skips a plugin not installed here', async () => {

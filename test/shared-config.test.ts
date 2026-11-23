@@ -7,6 +7,7 @@ import path from 'node:path'
 import express from 'express'
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest'
 
+import { exclusivePluginConfig } from '../src/master-plugins.js'
 import { OwnServerAccess } from '../src/own-access.js'
 import { SharedPluginConfig } from '../src/shared-config.js'
 import { MultihelmStore } from '../src/store.js'
@@ -24,11 +25,13 @@ describe('plugins with the same settings on every server', () => {
   const posts: { id: string; body: unknown }[] = []
   let own: { server: http.Server; url: string }
   let n = 0
+  let accessRequests = 0
 
   beforeAll(async () => {
     const app = express()
     app.use(express.json())
     app.post('/signalk/v1/access/requests', (_req, res) => {
+      accessRequests++
       res.sendStatus(404)
     })
     app.get('/plugins/:id/config', (req, res) => {
@@ -175,5 +178,35 @@ describe('plugins with the same settings on every server', () => {
     expect(here.config.dataset.isValidKey?.('signalk-multihelm')).toBe(false)
     expect(here.config.dataset.isValidKey?.('..')).toBe(false)
     expect(here.config.dataset.isValidKey?.('signalk-buddylist-plugin')).toBe(true)
+  })
+
+  it('asks for no admin access while no plugin is on the list', async () => {
+    accessRequests = 0
+    const here = shared([])
+    expect(await here.config.dataset.list()).toEqual([])
+    expect(accessRequests).toBe(0)
+  })
+
+  it("waits for another writer of the plugin's settings, and keeps what it changed", async () => {
+    plugins.set('buddies', { enabled: true, configuration: { buddies: [] } })
+    const here = shared(['buddies'])
+    let release = (): void => undefined
+    const other = exclusivePluginConfig('buddies', async () => {
+      await new Promise<void>((resolve) => {
+        release = resolve
+      })
+      plugins.set('buddies', { enabled: false, configuration: { buddies: [] } })
+    })
+
+    const applying = here.config.dataset.apply(incoming('buddies', { buddies: [{ urn: 'e' }] }))
+    await new Promise((resolve) => setTimeout(resolve, 50))
+    expect(posts).toEqual([])
+    release()
+    await other
+    await applying
+    expect(plugins.get('buddies')).toEqual({
+      enabled: false,
+      configuration: { buddies: [{ urn: 'e' }] }
+    })
   })
 })
