@@ -231,6 +231,8 @@ export class MasterOnlyPlugins {
   /** Without a usable record from before, a plugin not looked at since the start may run. */
   private readonly unknown: boolean
   private readonly looked = new Set<string>()
+  /** A pass still running after stop() must not write the record the next start reads. */
+  private stopped = false
 
   constructor(private readonly host: SwitchHost) {
     const kept = this.loadRunning()
@@ -296,8 +298,15 @@ export class MasterOnlyPlugins {
       )
   }
 
+  stop(): void {
+    this.stopped = true
+  }
+
   /** Returns whether the record could be kept; a plugin is started only then. */
   private mark(id: string, running: boolean): boolean {
+    if (this.stopped) {
+      return false
+    }
     const before = this.runsHere()
     const changed = this.running.has(id) !== running || !this.looked.has(id)
     this.looked.add(id)
@@ -314,6 +323,9 @@ export class MasterOnlyPlugins {
   }
 
   apply(): void {
+    if (this.stopped) {
+      return
+    }
     if (this.busy) {
       this.again = true
       return

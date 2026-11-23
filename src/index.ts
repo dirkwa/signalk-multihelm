@@ -499,6 +499,7 @@ export default function (app: ServerAPI): Plugin {
       stopFollowing = () => {
         clearInterval(pluginsTimer)
         stopRolePlugins()
+        masterPlugins.stop()
         settingsHandle.unregister()
         stopRoleAutopilot()
         autopilot?.stop()

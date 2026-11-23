@@ -273,6 +273,19 @@ describe('switching the plugins that run on the master only', () => {
     expect(posts).toEqual([])
   })
 
+  it('writes no record once stopped, so a pass still running cannot undo the next start', async () => {
+    const file = path.join(root, 'stopped', 'running.json')
+    plugins.set('autopilot', { enabled: true })
+    const old = switcher('stopped', null, ['autopilot'], undefined, file)
+    old.stop()
+    const current = switcher('stopped', true, ['autopilot'], undefined, file)
+    await current.applyOnce()
+
+    plugins.set('autopilot', { enabled: false })
+    await old.applyOnce()
+    expect(switcher('stopped', null, ['autopilot'], undefined, file).runsHere()).toBe(true)
+  })
+
   it('counts a listed plugin as running until it looks, when the record is missing or unreadable', async () => {
     plugins.set('autopilot', { enabled: false })
     const missing = path.join(root, 'no-record', 'running.json')
