@@ -42,6 +42,12 @@ export function roleNotice(status: Status, now: number): Notice {
   }
   const paired = status.peers.filter((p) => p.state === 'paired')
   const offline = paired.filter((p) => p.online === false)
+  if (status.majority === false) {
+    return {
+      tone: 'danger',
+      text: `No master: this server reaches too few of the boat's servers (${offline.map((p) => p.name).join(', ')} ${offline.length === 1 ? 'is' : 'are'} not reachable), so the plugins that run on the master only are stopped here.`
+    }
+  }
   if (offline.length > 0) {
     return {
       tone: 'danger',

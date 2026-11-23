@@ -82,6 +82,48 @@ from the transfers, and a master that has not answered for two and a half
 minutes no longer counts.
 When several servers are set, the one with the smallest server id is the
 master, and the plugin status says to set one only.
+
+### When the master is gone
+
+Other servers can take over while the master is gone: give each one a place
+under **Take over as master when the master is gone** (first, second, ...).
+When no server set to be the master has answered for three and a half
+minutes, counted from a server's own start too, the reachable server with
+the lowest place becomes the master,
+with everything that follows the master: the plugins that run on the master
+only, the autopilot, the course, the alarms, the history and the charts it
+shows. When the master set by hand is back, it takes the role back.
+
+A server becomes the master only once every server it reaches has stopped
+acting as it; a server acts until its
+plugins that run on the master only have stopped, and keeps trying a stop
+that failed. A server that has not looked at those plugins since its start,
+and has no record of them, counts as acting until it has, so approve its
+own access request. A server taking over also needs the votes of most
+servers: each server votes for one server at a time and keeps that vote for
+a while after it last gave it, so two that share the reachable servers never
+both take over. The server set by hand gets the role back the same way, with most votes, so
+it waits until the servers between it and a standby have stopped voting for
+that one. A server gives no vote while it, or a server it reaches, still
+acts as the master for another, so a master whose plugins will not stop holds
+up the handover even where the new one cannot reach it, as long as the
+servers that still see it can deny the new one most votes. That is as far as
+the guarantee goes: when the network splits so that the new master and most
+servers no longer reach the old one, and the old one cannot stop its plugins
+on its own, both may run them until it can. Its stop is a call to its own
+Signal K, retried every round. A server takes over only once every paired server has heard of its place,
+so a master cut off before it was set does not keep acting beside it, and it
+stops the plugins that run on the master only as soon as it loses those votes,
+as does any server that sees another acting.
+No server takes over while a
+paired server runs a Multihelm too old to say whether it acts. As soon as any server may
+take over, a server is the master only while it reaches most of the boat's
+paired servers, itself included; on a boat of two, the one set by hand
+counts as most. A server cut off from the others, the master included,
+stops the plugins that run on the master only, while the others carry on.
+A boat with only one of three servers switched on therefore has no master;
+leave **Never** on every server to keep the master set by hand alone. Pair
+every server with every other one, so they all count the same servers.
 A server that is set to be the master, or no longer is, says so when it
 next asks its peers, which it does right after the setting changes, so the
 role moves within seconds.
@@ -100,7 +142,8 @@ while another server is, through its own plugin settings, as the admin UI
 does: it shows them as disabled on the other servers, and they stay so
 across a restart. Their own settings are left as they are, so set them up
 on every server that may become the master. While no master is found,
-nothing is switched. While another server is the master, a plugin on the
+nothing is switched, unless this server reaches too few of the boat's
+servers (see _When the master is gone_): then it stops them. While another server is the master, a plugin on the
 list turned on by hand here is turned off again within a minute. Switching uses the same admin access as
 taking the vessel settings over (see below), on the master too.
 

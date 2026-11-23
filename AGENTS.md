@@ -98,7 +98,22 @@ sets by hand on one server (see `README.md`).
   which older peers ignore.
 - **The master** is the server set to be it with the smallest server id,
   among this one and the paired peers whose `hello` said `master: true`
-  within `MASTER_STALE_MS`. Every server must reach the same answer.
+  within `MASTER_STALE_MS`. While none has said so within `TAKEOVER_MS`,
+  it is the server with the lowest `standby` place. Once any server may take
+  over, a server counts a master only while it sees most of the paired
+  servers (a tie goes to the side with the one set by hand), and it acts as
+  the master only once no peer's `hello` says `acting` (older peers: `master`).
+  A server acts until its master-only plugins have stopped, and while it has
+  not looked at them without a usable record of them. Taking over needs
+  `TAKEOVER_MS` without a master answer since this server's start, every
+  paired peer saying `acting` and, in `seesStandby`, this server's current
+  `standby` place, and most servers' `elects` votes, its own
+  included, counted for `VOTE_COUNT_MS` from when it asked and held by the
+  voter for `VOTE_HOLD_MS`; a server gives no vote while it, or a peer it
+  sees, acts for another. The one set by hand needs those votes too
+  while any server may take over, a tie counting for it; a peer's
+  `standby` is kept in the peers file so a restart still knows.
+  Every server must reach the same answer.
 - **A file is served only if its dataset lists it**, and only while it still
   has the size and time that were hashed.
 - **`master/*` forwards only** GET, only to the paired master, only under a

@@ -5,7 +5,7 @@ import os from 'node:os'
 import path from 'node:path'
 
 import express from 'express'
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest'
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import {
   exclusivePluginConfig,
@@ -96,6 +96,9 @@ describe('switching the plugins that run on the master only', () => {
   const plugins = new Map<string, PluginState>()
   const posts: { id: string; body: unknown }[] = []
   let security = false
+  /** The next status request waits for this before it answers. */
+  let holdNextStatus: Promise<void> | null = null
+  const failing = new Set<string>()
   let own: { server: http.Server; url: string }
 
   beforeAll(async () => {
@@ -108,7 +111,10 @@ describe('switching the plugins that run on the master only', () => {
         res.sendStatus(404)
       }
     })
-    app.get('/plugins/:id', (req, res) => {
+    app.get('/plugins/:id', async (req, res) => {
+      const hold = holdNextStatus
+      holdNextStatus = null
+      await hold
       const plugin = plugins.get(req.params.id)
       if (!plugin) {
         res.sendStatus(404)
@@ -120,6 +126,10 @@ describe('switching the plugins that run on the master only', () => {
       res.json(plugins.get(req.params.id) ?? {})
     })
     app.post('/plugins/:id/config', (req, res) => {
+      if (failing.has(req.params.id)) {
+        res.sendStatus(500)
+        return
+      }
       posts.push({ id: req.params.id, body: req.body as unknown })
       plugins.set(req.params.id, req.body as PluginState)
       res.json('saved')
@@ -138,12 +148,19 @@ describe('switching the plugins that run on the master only', () => {
     plugins.clear()
     posts.length = 0
     security = false
+    failing.clear()
+  })
+
+  afterEach(() => {
+    vi.restoreAllMocks()
   })
 
   function switcher(
     name: string,
     wanted: boolean | null | (() => boolean | null),
-    ids: string[] | (() => string[])
+    ids: string[] | (() => string[]),
+    runningChanged?: () => void,
+    runningFile?: string
   ): MasterOnlyPlugins {
     const store = new MultihelmStore(path.join(root, name))
     const host: SwitchHost = {
@@ -157,6 +174,8 @@ describe('switching the plugins that run on the master only', () => {
       }),
       ownUrl: () => own.url,
       selfId: 'signalk-multihelm',
+      ...(runningChanged ? { runningChanged } : {}),
+      ...(runningFile !== undefined ? { runningFile } : {}),
       debug: () => undefined,
       error: () => undefined
     }
@@ -225,6 +244,137 @@ describe('switching the plugins that run on the master only', () => {
     let asked = 0
     // Known when the pass starts, gone by the time it would write.
     await switcher('moved', () => (asked++ === 0 ? false : null), ['autopilot']).applyOnce()
+    expect(posts).toEqual([])
+  })
+
+  it('says they still run here until a stop went through', async () => {
+    plugins.set('autopilot', { enabled: true })
+    failing.add('autopilot')
+    let changes = 0
+    const plugins_ = switcher('failing', false, ['autopilot'], () => {
+      changes++
+    })
+    await plugins_.applyOnce()
+    expect(plugins_.runsHere()).toBe(true)
+
+    failing.clear()
+    await plugins_.applyOnce()
+    expect(plugins_.runsHere()).toBe(false)
+    expect(changes).toBe(2)
+  })
+
+  it('counts plugins it saw running before a restart as running until it looks again', async () => {
+    const file = path.join(root, 'restart', 'running.json')
+    plugins.set('autopilot', { enabled: true })
+    const before = switcher('restart', true, ['autopilot'], undefined, file)
+    await before.applyOnce()
+    expect(before.runsHere()).toBe(true)
+
+    const after = switcher('restart', null, ['autopilot'], undefined, file)
+    expect(after.runsHere()).toBe(true)
+    plugins.set('autopilot', { enabled: false })
+    await after.applyOnce()
+    expect(after.runsHere()).toBe(false)
+    expect(posts).toEqual([])
+  })
+
+  it('writes no record once stopped, so a pass still running cannot undo the next start', async () => {
+    const file = path.join(root, 'stopped', 'running.json')
+    plugins.set('autopilot', { enabled: true })
+    let answer = (): void => undefined
+    holdNextStatus = new Promise((resolve) => {
+      answer = resolve
+    })
+    const old = switcher('stopped', null, ['autopilot'], undefined, file)
+    const inFlight = old.applyOnce()
+    await vi.waitFor(() => {
+      expect(holdNextStatus).toBeNull()
+    })
+    old.stop()
+    const current = switcher('stopped', true, ['autopilot'], undefined, file)
+    await current.applyOnce()
+
+    plugins.set('autopilot', { enabled: false })
+    answer()
+    await inFlight
+    expect(switcher('stopped', null, ['autopilot'], undefined, file).runsHere()).toBe(true)
+  })
+
+  it('counts a listed plugin as running until it looks, when the record is missing or unreadable', async () => {
+    plugins.set('autopilot', { enabled: false })
+    const missing = path.join(root, 'no-record', 'running.json')
+    const fresh = switcher('no-record', null, ['autopilot'], undefined, missing)
+    expect(fresh.runsHere()).toBe(true)
+    await fresh.applyOnce()
+    expect(fresh.runsHere()).toBe(false)
+
+    const broken = path.join(root, 'broken-record', 'running.json')
+    fs.mkdirSync(path.dirname(broken), { recursive: true })
+    fs.writeFileSync(broken, '{not json')
+    expect(switcher('broken-record', null, ['autopilot'], undefined, broken).runsHere()).toBe(true)
+  })
+
+  it('keeps a record of more plugins than the list may hold', () => {
+    const file = path.join(root, 'long-record', 'running.json')
+    fs.mkdirSync(path.dirname(file), { recursive: true })
+    const ids = Array.from({ length: 101 }, (_, i) => `plugin-${String(i)}`)
+    fs.writeFileSync(file, JSON.stringify(ids))
+    expect(switcher('long-record', null, ['plugin-100'], undefined, file).runsHere()).toBe(true)
+  })
+
+  const failWrites = (record: string): void => {
+    const write = fs.writeFileSync.bind(fs)
+    vi.spyOn(fs, 'writeFileSync').mockImplementation((file, ...rest) => {
+      if (String(file) === `${record}.tmp`) {
+        throw new Error('disk full')
+      }
+      write(file, ...rest)
+    })
+  }
+
+  it('removes a record it could not write, so a restart does not trust it', async () => {
+    const file = path.join(root, 'unwritable', 'running.json')
+    fs.mkdirSync(path.dirname(file), { recursive: true })
+    fs.writeFileSync(file, '[]')
+    plugins.set('autopilot', { enabled: true })
+    failWrites(file)
+    await switcher('unwritable', null, ['autopilot'], undefined, file).applyOnce()
+    expect(fs.existsSync(file)).toBe(false)
+    expect(switcher('unwritable', null, ['autopilot'], undefined, file).runsHere()).toBe(true)
+  })
+
+  it('starts no plugin whose running it cannot keep', async () => {
+    const file = path.join(root, 'blocked', 'running.json')
+    fs.mkdirSync(path.dirname(file), { recursive: true })
+    fs.writeFileSync(file, '[]')
+    plugins.set('autopilot', { enabled: false })
+    failWrites(file)
+    const rm = fs.rmSync.bind(fs)
+    vi.spyOn(fs, 'rmSync').mockImplementation((target, options) => {
+      if (String(target) === file) {
+        throw new Error('read-only')
+      }
+      rm(target, options)
+    })
+    await switcher('blocked-start', true, ['autopilot'], undefined, file).applyOnce()
+    expect(posts).toEqual([])
+  })
+
+  it('starts a plugin once the record it could not write is removed', async () => {
+    const file = path.join(root, 'removed', 'running.json')
+    fs.mkdirSync(path.dirname(file), { recursive: true })
+    fs.writeFileSync(file, '[]')
+    plugins.set('autopilot', { enabled: false })
+    failWrites(file)
+    await switcher('removed-start', true, ['autopilot'], undefined, file).applyOnce()
+    expect(posts).toHaveLength(1)
+  })
+
+  it('looks at the plugins while the role does not say, without switching them', async () => {
+    plugins.set('autopilot', { enabled: true })
+    const unknown = switcher('looks', null, ['autopilot'])
+    await unknown.applyOnce()
+    expect(unknown.runsHere()).toBe(true)
     expect(posts).toEqual([])
   })
 
