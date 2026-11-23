@@ -22,7 +22,6 @@ export const SHARE_INTERVAL_MS = 1_000
 export const HEARTBEAT_MS = 15_000
 export const RECONNECT_MIN_MS = 5_000
 const RECONNECT_MAX_MS = 60_000
-const SERVER_ID_LENGTH = 6
 const MAX_EVENT_LENGTH = 1_000_000
 /** A peer that lets this much pile up unread is dropped; it opens the stream again. */
 export const MAX_QUEUED_BYTES = 1_000_000
@@ -82,9 +81,9 @@ function sourcePart(text: string, dots: boolean): string {
   return text.replace(dots ? /[^\w.-]/g : /[^\w-]/g, '-') || '-'
 }
 
-/** Servers left with the default host name share it, so a part of the server id goes along. */
+/** Servers left with the default host name share it, so the server id goes along. */
 export function sharedSource(server: { id: string; name: string }, source: string): string {
-  const id = sourcePart(server.id, false).slice(0, SERVER_ID_LENGTH)
+  const id = sourcePart(server.id, false)
   return `${SHARED_SOURCE_PREFIX}${sourcePart(server.name, false)}-${id}.${sourcePart(source, true)}`
 }
 

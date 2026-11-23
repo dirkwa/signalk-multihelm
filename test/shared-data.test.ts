@@ -132,7 +132,7 @@ describe('data only one server sees', () => {
     expect(matches('environmentXwater.temperature')).toBe(false)
     expect(matches('navigation.position')).toBe(false)
     expect(sharedSource({ id: '3f2a1c9d-0000', name: 'engine room' }, 'n2k-er.23')).toBe(
-      'multihelm.engine-room-3f2a1c.n2k-er.23'
+      'multihelm.engine-room-3f2a1c9d-0000.n2k-er.23'
     )
     expect(shareSettings([' propulsion.* ', '', 3], 'x')).toEqual({
       paths: ['propulsion.*'],
@@ -163,7 +163,7 @@ describe('data only one server sees', () => {
     await until(() => got.length > 0)
     expect(got).toEqual([
       {
-        $source: `multihelm.backup-${backupId.slice(0, 6)}.j1939.0`,
+        $source: `multihelm.backup-${backupId}.j1939.0`,
         timestamp: T,
         values: [{ path: 'propulsion.port.revolutions', value: 31 }],
         meta: [{ path: 'propulsion.port.revolutions', value: { units: 'Hz' } }]
@@ -232,7 +232,7 @@ describe('data only one server sees', () => {
   }, 10_000)
 
   it('leaves out what does not fit, and what came from Multihelm already', () => {
-    const p = { id: 'abcdef12', name: 'p' }
+    const p = { id: 'abcdef', name: 'p' }
     expect(relabel(p, null)).toEqual([])
     expect(
       relabel(p, {
@@ -247,8 +247,8 @@ describe('data only one server sees', () => {
       { $source: 'multihelm.p-abcdef.a-b', timestamp: T, values: [{ path: 'c', value: 2 }] }
     ])
     const delta = { updates: [value('n2k.0', 'a', 1)] }
-    expect(relabel({ id: '111111aa', name: 'raspberrypi' }, delta)[0]?.$source).not.toBe(
-      relabel({ id: '222222bb', name: 'raspberrypi' }, delta)[0]?.$source
+    expect(relabel({ id: '111111-aaaa', name: 'raspberrypi' }, delta)[0]?.$source).not.toBe(
+      relabel({ id: '111111-bbbb', name: 'raspberrypi' }, delta)[0]?.$source
     )
   })
 
