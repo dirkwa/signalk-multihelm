@@ -3,7 +3,7 @@
  * shared with the boat's other servers. A server serves what it shares as a
  * stream of deltas at `shared-data`; each other server reads it with its
  * pairing token and puts the values in under the source
- * `multihelm.<server>.<source>`. Values under such a source are never shared
+ * `multihelm.<server>-<id>.<source>`. Values under such a source are never shared
  * again, so nothing goes round in circles, and no master is involved, so a
  * change of master changes nothing here.
  */
@@ -22,7 +22,10 @@ export const SHARE_INTERVAL_MS = 1_000
 export const HEARTBEAT_MS = 15_000
 export const RECONNECT_MIN_MS = 5_000
 const RECONNECT_MAX_MS = 60_000
+const SERVER_ID_LENGTH = 6
 const MAX_EVENT_LENGTH = 1_000_000
+/** A peer that lets this much pile up unread is dropped; it opens the stream again. */
+export const MAX_QUEUED_BYTES = 1_000_000
 /** Of a path's metadata, what a server needs to show a value it does not know. */
 const META_FIELDS = ['units', 'description', 'displayName'] as const
 
@@ -79,8 +82,10 @@ function sourcePart(text: string, dots: boolean): string {
   return text.replace(dots ? /[^\w.-]/g : /[^\w-]/g, '-') || '-'
 }
 
-export function sharedSource(server: string, source: string): string {
-  return `${SHARED_SOURCE_PREFIX}${sourcePart(server, false)}.${sourcePart(source, true)}`
+/** Servers left with the default host name share it, so a part of the server id goes along. */
+export function sharedSource(server: { id: string; name: string }, source: string): string {
+  const id = sourcePart(server.id, false).slice(0, SERVER_ID_LENGTH)
+  return `${SHARED_SOURCE_PREFIX}${sourcePart(server.name, false)}-${id}.${sourcePart(source, true)}`
 }
 
 interface Client {
@@ -204,18 +209,17 @@ export class DataSharer {
     const updates = [...grouped.values()]
     for (const client of this.clients) {
       const delta = { updates: updates.map((u) => this.withMeta(u, client.metaSent)) }
-      client.res.write(`data: ${JSON.stringify(delta)}\n\n`)
+      this.send(client, `data: ${JSON.stringify(delta)}\n\n`)
     }
   }
 
-  /** A path's metadata goes along with its first value on each stream. */
+  /** A path's metadata goes along with its first value on each stream that has some. */
   private withMeta(update: SharedUpdate, sent: Set<string>): SharedUpdate {
     const meta: NonNullable<SharedUpdate['meta']> = []
     for (const { path } of update.values) {
       if (sent.has(path)) {
         continue
       }
-      sent.add(path)
       const known = this.host.meta(path)
       if (!isPlainObject(known)) {
         continue
@@ -227,6 +231,7 @@ export class DataSharer {
         }
       }
       if (Object.keys(value).length > 0) {
+        sent.add(path)
         meta.push({ path, value })
       }
     }
@@ -235,8 +240,17 @@ export class DataSharer {
 
   private write(text: string): void {
     for (const client of this.clients) {
-      client.res.write(text)
+      this.send(client, text)
     }
+  }
+
+  private send(client: Client, text: string): void {
+    if (client.res.writableLength > MAX_QUEUED_BYTES) {
+      this.clients.delete(client)
+      client.res.destroy()
+      return
+    }
+    client.res.write(text)
   }
 
   stop(): void {
@@ -251,7 +265,7 @@ export class DataSharer {
 }
 
 /** A peer's delta, checked and put under that peer's source; what does not fit is left out. */
-export function relabel(server: string, delta: unknown): SharedUpdate[] {
+export function relabel(server: { id: string; name: string }, delta: unknown): SharedUpdate[] {
   if (!isPlainObject(delta) || !Array.isArray(delta.updates)) {
     return []
   }
@@ -313,7 +327,12 @@ export class SharedDataReceiver {
     const wanted = new Map(this.host.peers().map((p) => [p.id, p]))
     for (const [id, reading] of this.readings) {
       const peer = wanted.get(id)
-      if (!peer || peer.url !== reading.peer.url || peer.token !== reading.peer.token) {
+      if (
+        !peer ||
+        peer.url !== reading.peer.url ||
+        peer.token !== reading.peer.token ||
+        peer.ca !== reading.peer.ca
+      ) {
         this.close(id, reading)
       }
     }
@@ -406,7 +425,7 @@ export class SharedDataReceiver {
     } catch {
       return
     }
-    const updates = relabel(peer.name, delta)
+    const updates = relabel(peer, delta)
     if (updates.length > 0) {
       this.host.inject(updates)
     }

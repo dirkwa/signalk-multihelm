@@ -128,7 +128,9 @@ describe('data only one server sees', () => {
     expect(matches('environment.water.temperature')).toBe(true)
     expect(matches('environmentXwater.temperature')).toBe(false)
     expect(matches('navigation.position')).toBe(false)
-    expect(sharedSource('engine room', 'n2k-er.23')).toBe('multihelm.engine-room.n2k-er.23')
+    expect(sharedSource({ id: '3f2a1c9d-0000', name: 'engine room' }, 'n2k-er.23')).toBe(
+      'multihelm.engine-room-3f2a1c.n2k-er.23'
+    )
     expect(shareSettings([' propulsion.* ', '', 3], 'x')).toEqual({
       paths: ['propulsion.*'],
       connections: []
@@ -145,6 +147,7 @@ describe('data only one server sees', () => {
     expect(main.mh.hello().shares).toBeUndefined()
     const peers = main.mh.sharingPeers()
     expect(peers.map((p) => p.name)).toEqual(['backup'])
+    const backupId = backup.mh.serverId
 
     const { r, got } = receiver(() => peers)
     receivers.push(r)
@@ -157,7 +160,7 @@ describe('data only one server sees', () => {
     await until(() => got.length > 0)
     expect(got).toEqual([
       {
-        $source: 'multihelm.backup.j1939.0',
+        $source: `multihelm.backup-${backupId.slice(0, 6)}.j1939.0`,
         timestamp: T,
         values: [{ path: 'propulsion.port.revolutions', value: 31 }],
         meta: [{ path: 'propulsion.port.revolutions', value: { units: 'Hz' } }]
@@ -225,9 +228,10 @@ describe('data only one server sees', () => {
   }, 10_000)
 
   it('leaves out what does not fit, and what came from Multihelm already', () => {
-    expect(relabel('p', null)).toEqual([])
+    const p = { id: 'abcdef12', name: 'p' }
+    expect(relabel(p, null)).toEqual([])
     expect(
-      relabel('p', {
+      relabel(p, {
         updates: [
           { $source: 'multihelm.q.a', timestamp: T, values: [{ path: 'a', value: 1 }] },
           { $source: 'a', values: [{ path: 'a', value: 1 }] },
@@ -235,7 +239,13 @@ describe('data only one server sees', () => {
           { $source: 'a/b', timestamp: T, values: [{ path: 'c', value: 2, extra: true }] }
         ]
       })
-    ).toEqual([{ $source: 'multihelm.p.a-b', timestamp: T, values: [{ path: 'c', value: 2 }] }])
+    ).toEqual([
+      { $source: 'multihelm.p-abcdef.a-b', timestamp: T, values: [{ path: 'c', value: 2 }] }
+    ])
+    const delta = { updates: [value('n2k.0', 'a', 1)] }
+    expect(relabel({ id: '111111aa', name: 'raspberrypi' }, delta)[0]?.$source).not.toBe(
+      relabel({ id: '222222bb', name: 'raspberrypi' }, delta)[0]?.$source
+    )
   })
 
   it('closes the stream of a peer that stopped sharing', async () => {
@@ -252,5 +262,79 @@ describe('data only one server sees', () => {
     s.sharer.flush()
     await new Promise((resolve) => setTimeout(resolve, 100))
     expect(got).toEqual([])
+  })
+
+  it('sends the units of a path once they are known, though its first value had none', async () => {
+    const s = await station('late-meta', { paths: ['tanks.*'], connections: [] })
+    const { r, got } = receiver(() => [{ id: 'm', name: 'm', url: s.url, token: '' }])
+    receivers.push(r)
+    r.check()
+    await new Promise((resolve) => setTimeout(resolve, 100))
+    s.sharer.offer(value('tank.1', 'tanks.fuel.0.currentLevel', 0.4))
+    s.sharer.flush()
+    await until(() => got.length === 1)
+    expect(got[0]?.meta).toBeUndefined()
+    s.meta.set('tanks.fuel.0.currentLevel', { units: 'ratio' })
+    s.sharer.offer(value('tank.1', 'tanks.fuel.0.currentLevel', 0.39))
+    s.sharer.flush()
+    await until(() => got.length === 2)
+    expect(got[1]?.meta).toEqual([{ path: 'tanks.fuel.0.currentLevel', value: { units: 'ratio' } }])
+  })
+
+  it('opens the stream again with the certificate a peer was paired again with', () => {
+    const opened: (string | undefined)[] = []
+    let peer: SharingPeer = { id: 'c', name: 'c', url: 'https://127.0.0.1:1', token: '', ca: 'old' }
+    const r = new SharedDataReceiver({
+      peers: () => [peer],
+      open: (p) => {
+        opened.push(p.ca)
+        return new Promise(() => undefined)
+      },
+      inject: () => undefined,
+      debug: () => undefined
+    })
+    receivers.push(r)
+    r.check()
+    r.check()
+    peer = { ...peer, ca: 'new' }
+    r.check()
+    expect(opened).toEqual(['old', 'new'])
+  })
+
+  it('drops a peer that leaves too much unread, and keeps serving the others', () => {
+    const sharer = new DataSharer({
+      settings: { paths: ['a'], connections: [] },
+      selfId: 'signalk-multihelm',
+      meta: () => undefined
+    })
+    const client = (queued: number) => {
+      const written: string[] = []
+      let destroyed = false
+      const res = {
+        writableLength: queued,
+        status: () => res,
+        set: () => res,
+        flushHeaders: () => undefined,
+        write: (text: string) => written.push(text),
+        destroy: () => {
+          destroyed = true
+        },
+        end: () => undefined
+      }
+      const req = { on: () => undefined }
+      sharer.serve(req as never, res as never)
+      return { res, written, destroyed: () => destroyed }
+    }
+    const slow = client(0)
+    const fast = client(0)
+    slow.res.writableLength = 2_000_000
+    sharer.offer(value('s', 'a', 1))
+    sharer.flush()
+    sharer.offer(value('s', 'a', 2))
+    sharer.flush()
+    expect(slow.destroyed()).toBe(true)
+    expect(slow.written).toHaveLength(1)
+    expect(fast.written.filter((w) => w.startsWith('data:'))).toHaveLength(2)
+    sharer.stop()
   })
 })

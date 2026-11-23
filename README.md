@@ -173,7 +173,9 @@ to share (one per line, `*` for any part, such as `propulsion.*`) or tick the
 data connections whose every value is to be shared. Every other paired
 server then shows those values, at most once a second per path and source,
 under the source `multihelm.<that server>.<source>`, such as
-`multihelm.engine-room.n2k-er.23`, with their units and display names.
+`multihelm.engine-room-3f2a1c.n2k-er.23` (the server's name and the start of
+its server id, since servers left with the default host name share it), with
+their units and display names.
 
 No master is involved: each server reads the others' shared data directly
 with its pairing token, so a change of master changes nothing here, and a
