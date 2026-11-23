@@ -209,4 +209,25 @@ describe('plugins with the same settings on every server', () => {
       configuration: { buddies: [{ urn: 'e' }] }
     })
   })
+
+  it('does not write settings of a plugin taken off the list while it waited for another writer', async () => {
+    plugins.set('buddies', { enabled: true, configuration: { buddies: [] } })
+    let ids = ['buddies']
+    const here = shared(() => ids)
+    let release = (): void => undefined
+    const other = exclusivePluginConfig('buddies', async () => {
+      await new Promise<void>((resolve) => {
+        release = resolve
+      })
+    })
+
+    const applying = here.config.dataset.apply(incoming('buddies', { buddies: [{ urn: 'f' }] }))
+    await new Promise((resolve) => setTimeout(resolve, 50))
+    ids = []
+    release()
+    await other
+    await expect(applying).rejects.toThrow('not on the list')
+    expect(posts).toEqual([])
+    expect(fs.existsSync(path.join(here.dir, 'buddies'))).toBe(false)
+  })
 })

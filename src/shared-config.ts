@@ -113,9 +113,7 @@ export class SharedPluginConfig {
       if (!isPlainObject(configuration)) {
         throw new Error(`the shared settings of ${entry.key} are not an object`)
       }
-      if (!this.shared().includes(entry.key)) {
-        throw new Error(`${entry.key} is not on the list of plugins with shared settings yet`)
-      }
+      this.mustBeShared(entry.key)
       const token = await this.host.access.token()
       if (token === null) {
         throw new Error("this server's own access request is not approved yet")
@@ -131,6 +129,8 @@ export class SharedPluginConfig {
           }
           throw error
         }
+        // The list may have changed while another writer held the plugin's settings.
+        this.mustBeShared(entry.key)
         await callServer('POST', url, token, {
           ...(isPlainObject(options) ? options : {}),
           configuration
@@ -150,6 +150,12 @@ export class SharedPluginConfig {
       // Taken off the list: the plugin keeps the settings it has here.
       await fs.promises.rm(this.entryDir(key), { recursive: true, force: true })
       return true
+    }
+  }
+
+  private mustBeShared(id: string): void {
+    if (!this.shared().includes(id)) {
+      throw new Error(`${id} is not on the list of plugins with shared settings`)
     }
   }
 
