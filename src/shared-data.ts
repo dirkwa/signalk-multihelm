@@ -101,13 +101,34 @@ export interface SharerHost {
   meta: (path: string) => unknown
 }
 
+interface SharedValue {
+  $source: string
+  timestamp: string
+  path: string
+  value: unknown
+}
+
+/** One update per source and timestamp. */
+function grouped(values: Iterable<SharedValue>): SharedUpdate[] {
+  const updates = new Map<string, SharedUpdate>()
+  for (const { $source, timestamp, path, value } of values) {
+    const key = `${$source}\n${timestamp}`
+    let update = updates.get(key)
+    if (!update) {
+      update = { $source, timestamp, values: [] }
+      updates.set(key, update)
+    }
+    update.values.push({ path, value })
+  }
+  return [...updates.values()]
+}
+
 /** The serving side: collects the values to share and streams them to every peer reading. */
 export class DataSharer {
   private readonly matches: (path: string) => boolean
-  private readonly pending = new Map<
-    string,
-    { $source: string; timestamp: string; path: string; value: unknown }
-  >()
+  private readonly pending = new Map<string, SharedValue>()
+  /** The last value of every path and source, for a peer that begins to read. */
+  private readonly latest = new Map<string, SharedValue>()
   private readonly clients = new Set<Client>()
   private readonly flushTimer: NodeJS.Timeout
   private readonly heartbeatTimer: NodeJS.Timeout
@@ -133,7 +154,7 @@ export class DataSharer {
 
   /** One update of this vessel's deltas, as the server's subscription hands it over. */
   offer(update: unknown): void {
-    if (this.clients.size === 0 || !isPlainObject(update)) {
+    if (!isPlainObject(update)) {
       return
     }
     const source = update.$source
@@ -149,12 +170,12 @@ export class DataSharer {
         continue
       }
       if (ofConnection || this.matches(entry.path)) {
-        this.pending.set(`${source}\n${entry.path}`, {
-          $source: source,
-          timestamp,
-          path: entry.path,
-          value: entry.value
-        })
+        const key = `${source}\n${entry.path}`
+        const shared = { $source: source, timestamp, path: entry.path, value: entry.value }
+        this.latest.set(key, shared)
+        if (this.clients.size > 0) {
+          this.pending.set(key, shared)
+        }
       }
     }
   }
@@ -188,29 +209,26 @@ export class DataSharer {
     req.on('close', () => {
       this.clients.delete(client)
     })
+    if (this.latest.size > 0) {
+      this.sendUpdates(client, grouped(this.latest.values()))
+    }
   }
 
-  /** Sends what came in since the last time, one update per source and timestamp. */
+  /** Sends what came in since the last time. */
   flush(): void {
     if (this.pending.size === 0) {
       return
     }
-    const grouped = new Map<string, SharedUpdate>()
-    for (const { $source, timestamp, path, value } of this.pending.values()) {
-      const key = `${$source}\n${timestamp}`
-      let update = grouped.get(key)
-      if (!update) {
-        update = { $source, timestamp, values: [] }
-        grouped.set(key, update)
-      }
-      update.values.push({ path, value })
-    }
+    const updates = grouped(this.pending.values())
     this.pending.clear()
-    const updates = [...grouped.values()]
     for (const client of this.clients) {
-      const delta = { updates: updates.map((u) => this.withMeta(u, client.metaSent)) }
-      this.send(client, `data: ${JSON.stringify(delta)}\n\n`)
+      this.sendUpdates(client, updates)
     }
+  }
+
+  private sendUpdates(client: Client, updates: SharedUpdate[]): void {
+    const delta = { updates: updates.map((u) => this.withMeta(u, client.metaSent)) }
+    this.send(client, `data: ${JSON.stringify(delta)}\n\n`)
   }
 
   /** A path's metadata goes along with its first value on each stream that has some. */
@@ -261,6 +279,7 @@ export class DataSharer {
     }
     this.clients.clear()
     this.pending.clear()
+    this.latest.clear()
   }
 }
 
@@ -325,7 +344,8 @@ function hasFreshOwnSource(node: unknown, now: number): boolean {
       typeof source === 'string' &&
       !source.startsWith(SHARED_SOURCE_PREFIX) &&
       typeof timestamp === 'string' &&
-      now - Date.parse(timestamp) <= OWN_SOURCE_FRESH_MS
+      // A clock ahead must not keep an own source fresh long after it went quiet.
+      Math.abs(now - Date.parse(timestamp)) <= OWN_SOURCE_FRESH_MS
   )
 }
 

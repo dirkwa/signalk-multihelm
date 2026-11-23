@@ -350,6 +350,11 @@ describe('data only one server sees', () => {
     const nodes: Record<string, unknown> = {
       'same.bus': { value: 1, $source: 'n2k.c0ffee', timestamp: fresh, meta: { units: 'V' } },
       'own.quiet': { value: 1, $source: 'n2k.c0ffee', timestamp: stale },
+      'own.ahead': {
+        value: 1,
+        $source: 'n2k.c0ffee',
+        timestamp: new Date(now + 3_600_000).toISOString()
+      },
       'shared.only': {
         value: 2,
         $source: 'multihelm.er-abcdef.n2k.1',
@@ -371,7 +376,14 @@ describe('data only one server sees', () => {
         {
           $source: 'multihelm.er-abcdef.n2k.1',
           timestamp: T,
-          values: ['same.bus', 'own.quiet', 'shared.only', 'two.sources', 'new.path'].map((p) => ({
+          values: [
+            'same.bus',
+            'own.quiet',
+            'own.ahead',
+            'shared.only',
+            'two.sources',
+            'new.path'
+          ].map((p) => ({
             path: p,
             value: 0
           })),
@@ -388,9 +400,24 @@ describe('data only one server sees', () => {
       {
         $source: 'multihelm.er-abcdef.n2k.1',
         timestamp: T,
-        values: ['own.quiet', 'shared.only', 'new.path'].map((p) => ({ path: p, value: 0 })),
+        values: ['own.quiet', 'own.ahead', 'shared.only', 'new.path'].map((p) => ({
+          path: p,
+          value: 0
+        })),
         meta: [{ path: 'new.path', value: { units: 'K' } }]
       }
     ])
+  })
+
+  it('gives a peer that begins to read the latest value of every shared path', async () => {
+    const s = await station('replay', { paths: ['tanks.*'], connections: [] })
+    s.sharer.offer(value('tank.1', 'tanks.fuel.0.currentLevel', 0.5))
+    s.sharer.offer(value('tank.1', 'tanks.fuel.0.currentLevel', 0.45))
+    s.sharer.flush()
+    const { r, got } = receiver(() => [{ id: 'r', name: 'r', url: s.url, token: '' }])
+    receivers.push(r)
+    r.check()
+    await until(() => got.length === 1)
+    expect(got[0]?.values).toEqual([{ path: 'tanks.fuel.0.currentLevel', value: 0.45 }])
   })
 })
