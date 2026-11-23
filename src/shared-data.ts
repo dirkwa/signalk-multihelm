@@ -303,10 +303,63 @@ export function relabel(server: { id: string; name: string }, delta: unknown): S
   return updates
 }
 
+/**
+ * A value this server has from a source of its own, such as the same bus
+ * seen by two stations, is not taken a second time; the shared one stands
+ * in once the own source has been quiet this long.
+ */
+export const OWN_SOURCE_FRESH_MS = 30_000
+
+function hasFreshOwnSource(node: unknown, now: number): boolean {
+  if (!isPlainObject(node)) {
+    return false
+  }
+  const sources = isPlainObject(node.values)
+    ? Object.entries(node.values).map(([source, v]) => [
+        source,
+        isPlainObject(v) ? v.timestamp : undefined
+      ])
+    : [[node.$source, node.timestamp]]
+  return sources.some(
+    ([source, timestamp]) =>
+      typeof source === 'string' &&
+      !source.startsWith(SHARED_SOURCE_PREFIX) &&
+      typeof timestamp === 'string' &&
+      now - Date.parse(timestamp) <= OWN_SOURCE_FRESH_MS
+  )
+}
+
+/** Leaves out the values this server has a fresh source of its own for, and metadata it has already. */
+export function withoutOwn(
+  updates: SharedUpdate[],
+  local: (path: string) => unknown,
+  now: number
+): SharedUpdate[] {
+  const kept: SharedUpdate[] = []
+  for (const update of updates) {
+    const values = update.values.filter((v) => !hasFreshOwnSource(local(v.path), now))
+    const meta = (update.meta ?? []).filter((m) => {
+      const node = local(m.path)
+      return !isPlainObject(node) || !isPlainObject(node.meta)
+    })
+    if (values.length > 0 || meta.length > 0) {
+      kept.push({
+        $source: update.$source,
+        timestamp: update.timestamp,
+        values,
+        ...(meta.length > 0 ? { meta } : {})
+      })
+    }
+  }
+  return kept
+}
+
 export interface ReceiverHost {
   peers: () => SharingPeer[]
   open: (peer: SharingPeer) => Promise<{ status: number; stream: http.IncomingMessage }>
   inject: (updates: SharedUpdate[]) => void
+  /** This vessel's node at a path, as the server holds it: `value`, `$source`, `timestamp`, `values`, `meta`. */
+  local: (path: string) => unknown
   debug: (msg: string) => void
 }
 
@@ -425,7 +478,7 @@ export class SharedDataReceiver {
     } catch {
       return
     }
-    const updates = relabel(peer, delta)
+    const updates = withoutOwn(relabel(peer, delta), this.host.local, Date.now())
     if (updates.length > 0) {
       this.host.inject(updates)
     }

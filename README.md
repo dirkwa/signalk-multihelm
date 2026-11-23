@@ -181,9 +181,11 @@ No master is involved: each server reads the others' shared data directly
 with its pairing token, so a change of master changes nothing here, and a
 server that goes away only stops sending. Values under a `multihelm.` source
 are never shared again, so every server may share the same paths without
-anything going round in circles. When a server has a sensor of its own on a
-shared path, such as a second GPS, both sources are there, and the source
-priorities decide which one wins. Only values are shared: devices on such a
+anything going round in circles. A server takes no shared value for a
+path it has a source of its own for, such as a bus two stations are on or a
+second GPS, so every path keeps one value there; once its own source has
+been quiet for 30 seconds, the shared one stands in. Sharing a whole
+connection therefore adds each value only where it is missing. Only values are shared: devices on such a
 bus are still operated from their own server. **Take the data the other
 servers share** turns it off on a server.
 

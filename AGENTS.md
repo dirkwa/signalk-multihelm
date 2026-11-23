@@ -66,8 +66,9 @@ sets by hand on one server (see `README.md`).
   shared as server-sent events at `shared-data` (latest per path and
   source, once a second); `SharedDataReceiver` reads that stream from every
   peer whose `hello` says `shares`, with the pairing token, and puts the
-  values in under `multihelm.<peer>.<source>`. Values under a `multihelm.`
-  source, or Multihelm's own, are never shared again.
+  values in under `multihelm.<peer>.<source>`, except where this server has
+  a fresh source of its own for the path (`withoutOwn`). Values under a
+  `multihelm.` source, or Multihelm's own, are never shared again.
 - `master-control.ts` — `MasterControlAccess`: this server's readwrite
   device token on the master, for the commands a station sends there; one
   request at a time, kept per master.

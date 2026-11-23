@@ -16,6 +16,8 @@ import {
   SharedDataReceiver,
   pathMatcher,
   relabel,
+  withoutOwn,
+  OWN_SOURCE_FRESH_MS,
   sharedSource,
   shareSettings,
   type ShareSettings,
@@ -83,6 +85,7 @@ function receiver(peers: () => SharingPeer[]): { r: SharedDataReceiver; got: Sha
     inject: (updates) => {
       got.push(...updates)
     },
+    local: () => undefined,
     debug: () => undefined
   })
   return { r, got }
@@ -216,6 +219,7 @@ describe('data only one server sees', () => {
       inject: (updates) => {
         got.push(...updates)
       },
+      local: () => undefined,
       debug: () => undefined
     })
     receivers.push(r)
@@ -291,6 +295,7 @@ describe('data only one server sees', () => {
         return new Promise(() => undefined)
       },
       inject: () => undefined,
+      local: () => undefined,
       debug: () => undefined
     })
     receivers.push(r)
@@ -336,5 +341,56 @@ describe('data only one server sees', () => {
     expect(slow.written).toHaveLength(1)
     expect(fast.written.filter((w) => w.startsWith('data:'))).toHaveLength(2)
     sharer.stop()
+  })
+
+  it('takes no value it has a fresh source of its own for, and stands in once that source is quiet', () => {
+    const now = Date.parse(T)
+    const fresh = new Date(now - 1000).toISOString()
+    const stale = new Date(now - OWN_SOURCE_FRESH_MS - 1000).toISOString()
+    const nodes: Record<string, unknown> = {
+      'same.bus': { value: 1, $source: 'n2k.c0ffee', timestamp: fresh, meta: { units: 'V' } },
+      'own.quiet': { value: 1, $source: 'n2k.c0ffee', timestamp: stale },
+      'shared.only': {
+        value: 2,
+        $source: 'multihelm.er-abcdef.n2k.1',
+        timestamp: fresh,
+        values: { 'multihelm.er-abcdef.n2k.1': { value: 2, timestamp: fresh } }
+      },
+      'two.sources': {
+        value: 3,
+        $source: 'multihelm.er-abcdef.n2k.1',
+        timestamp: fresh,
+        values: {
+          'multihelm.er-abcdef.n2k.1': { value: 3, timestamp: fresh },
+          'can0.7': { value: 3, timestamp: fresh }
+        }
+      }
+    }
+    const kept = withoutOwn(
+      [
+        {
+          $source: 'multihelm.er-abcdef.n2k.1',
+          timestamp: T,
+          values: ['same.bus', 'own.quiet', 'shared.only', 'two.sources', 'new.path'].map((p) => ({
+            path: p,
+            value: 0
+          })),
+          meta: [
+            { path: 'same.bus', value: { units: 'V' } },
+            { path: 'new.path', value: { units: 'K' } }
+          ]
+        }
+      ],
+      (p) => nodes[p],
+      now
+    )
+    expect(kept).toEqual([
+      {
+        $source: 'multihelm.er-abcdef.n2k.1',
+        timestamp: T,
+        values: ['own.quiet', 'shared.only', 'new.path'].map((p) => ({ path: p, value: 0 })),
+        meta: [{ path: 'new.path', value: { units: 'K' } }]
+      }
+    ])
   })
 })

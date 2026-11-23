@@ -78,7 +78,7 @@ export const ConfigSchema = Type.Object({
   takeSharedData: Type.Boolean({
     title: 'Take the data the other servers share',
     description:
-      'Paths and connections another server shares show here under the source `multihelm.<that server>.<source>`, so the source priorities can prefer a sensor of this server.',
+      'Paths and connections another server shares show here under the source `multihelm.<that server>.<source>`, wherever this server has no source of its own for them.',
     default: true
   })
 })

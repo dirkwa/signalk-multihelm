@@ -822,7 +822,7 @@ function SettingsCard({ configuration, save }: Props) {
         {option(
           'takeSharedData',
           'Take the data the other servers share',
-          'Values another server shares show here under the source multihelm.<that server>.<source>, so the source priorities can prefer a sensor of this server.'
+          'Values another server shares show here under the source multihelm.<that server>.<source>, wherever this server has no source of its own for them.'
         )}
         <button
           type="button"

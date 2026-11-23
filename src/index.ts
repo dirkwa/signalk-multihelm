@@ -282,6 +282,7 @@ export default function (app: ServerAPI): Plugin {
           updates
         } as unknown as Parameters<ServerAPI['handleMessage']>[1])
       },
+      local: (p) => app.getSelfPath(p),
       debug: (msg) => {
         app.debug(msg)
       }
