@@ -31,7 +31,8 @@
     ],
     "recommends": [
       "signalk-charts-provider-simple",
-      "signalk-questdb"
+      "signalk-questdb",
+      "signalk-rules"
     ]
   },
   "signalk-plugin-enabled-by-default": true,
