@@ -153,8 +153,19 @@ export function pathsFromText(text: string): string[] {
   ]
 }
 
-/** The App Store's install route on this server; a scoped name keeps its `/`. */
-export function appInstallUrl(name: string, version: string): string {
+const PACKAGE_NAME = /^(?:@[a-z0-9~-][a-z0-9._~-]*\/)?[a-z0-9~-][a-z0-9._~-]*$/i
+const SEMVER =
+  /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?(\+[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$/
+
+/**
+ * The App Store's install route on this server, a scoped name keeping its
+ * `/`; null for a name or version that is not a plain npm package and
+ * version, which a peer could otherwise turn into another route here.
+ */
+export function appInstallUrl(name: string, version: string): string | null {
+  if (name.length > 214 || !PACKAGE_NAME.test(name) || !SEMVER.test(version)) {
+    return null
+  }
   const parts = name.split('/').map(encodeURIComponent).join('/')
   return `/skServer/appstore/install/${parts}/${encodeURIComponent(version)}`
 }

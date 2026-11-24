@@ -140,6 +140,22 @@ describe('the configuration panel', () => {
     expect(appInstallUrl('signalk-flags', '1.2.0')).toBe(
       '/skServer/appstore/install/signalk-flags/1.2.0'
     )
+    for (const [name, version] of [
+      ['../../restore', '1.0.0'],
+      ['@signalk/..', '1.0.0'],
+      ['./x', '1.0.0'],
+      ['@scope//x', '1.0.0'],
+      ['', '1.0.0'],
+      ['signalk-flags', 'npm:other-pkg@1.0.0'],
+      ['signalk-flags', '^1.2.0'],
+      ['signalk-flags', 'https://example.com/x.tgz'],
+      ['signalk-flags', '1.2.0/../../restore']
+    ]) {
+      expect(appInstallUrl(name ?? '', version ?? '')).toBeNull()
+    }
+    expect(appInstallUrl('signalk-flags', '2.0.0-beta.1+b7')).toBe(
+      '/skServer/appstore/install/signalk-flags/2.0.0-beta.1%2Bb7'
+    )
     expect(installErrorText('HTTP 404')).toMatch(/does not offer/)
     expect(installErrorText('HTTP 500')).toBe('HTTP 500')
   })

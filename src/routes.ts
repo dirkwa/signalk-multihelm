@@ -12,7 +12,12 @@
 import type { IRouter, Request, Response } from 'express'
 
 import type { DiscoveredServer } from './discovery.js'
-import { INSTALLED_ROUTE, type AppsOverview, type LocalApps } from './installed-apps.js'
+import {
+  INSTALLED_ROUTE,
+  isPackageName,
+  type AppsOverview,
+  type LocalApps
+} from './installed-apps.js'
 import { parsePluginIds, type PluginList } from './master-plugins.js'
 import { MASTER_ROUTE, type MasterProxy } from './master-proxy.js'
 import type { Multihelm } from './multihelm.js'
@@ -40,7 +45,6 @@ function queryString(req: Request, name: string): string {
 }
 
 const SERVER_ID = /^[\w-]{1,64}$/
-const PACKAGE_NAME = /^(@[\w.-]+\/)?[\w.-]{1,214}$/
 const VERSION = /^[\w.+-]{1,32}$/
 
 /** The server asking, when it said; what does not fit is left out. */
@@ -314,7 +318,7 @@ export function registerRoutes(
       }
       if (
         typeof body?.name !== 'string' ||
-        !PACKAGE_NAME.test(body.name) ||
+        !isPackageName(body.name) ||
         typeof body.hidden !== 'boolean'
       ) {
         res.status(400).json({ error: 'name must be a package name and hidden a boolean' })

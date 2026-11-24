@@ -12,6 +12,9 @@ import {
   LocalApps,
   compareApps,
   installedApps,
+  isPackageName,
+  isVersion,
+  parseInstalled,
   peerApps,
   type InstalledApp
 } from '../src/installed-apps.js'
@@ -165,6 +168,34 @@ describe('the apps on the servers of the boat', () => {
       hidden: ['mayara'],
       unreadable: [{ name: 'Old', error: 'it runs an older Multihelm' }]
     })
+  })
+
+  it('takes from a peer only plain package names and versions', () => {
+    const entry = (name: string, version: string) => ({
+      name,
+      version,
+      title: name,
+      plugin: true,
+      webapp: false,
+      enabled: true
+    })
+    const parsed = parseInstalled({
+      apps: [
+        entry('signalk-flags', '1.2.0'),
+        entry('@signalk/tracks-plugin', '2.0.0-beta.3'),
+        entry('../../restore', '1.0.0'),
+        entry('@signalk/..', '1.0.0'),
+        entry('.hidden', '1.0.0'),
+        entry('signalk-flags-alias', 'npm:other-pkg@1.0.0'),
+        entry('signalk-range', '^1.0.0'),
+        entry('signalk-url', 'https://example.com/x.tgz'),
+        entry('', '1.0.0')
+      ]
+    })
+    expect(parsed.map((a) => a.name)).toEqual(['signalk-flags', '@signalk/tracks-plugin'])
+    expect(isPackageName('@scope/x')).toBe(true)
+    expect(isVersion('1.2.3+build.5')).toBe(true)
+    expect(isVersion('01.2.3')).toBe(false)
   })
 
   it('compares nothing while this server cannot read its own apps', () => {

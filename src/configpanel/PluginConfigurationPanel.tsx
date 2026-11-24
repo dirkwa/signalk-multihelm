@@ -692,7 +692,11 @@ function AppsCard() {
   const install = (app: AppElsewhere): Promise<void> =>
     act(app.name, async () => {
       const version = newestVersion(app.servers.map((s) => s.version))
-      await call(appInstallUrl(app.name, version), { method: 'POST' }).catch((e: unknown) => {
+      const url = appInstallUrl(app.name, version)
+      if (!url) {
+        throw new Error(`${app.name} ${version} is not a package the App Store installs`)
+      }
+      await call(url, { method: 'POST' }).catch((e: unknown) => {
         throw new Error(installErrorText(errorText(e)))
       })
       setInstalling((list) => [...list, app.name])

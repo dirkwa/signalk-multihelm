@@ -70,6 +70,23 @@ export function installedApps(plugins: unknown, webapps: unknown): InstalledApp[
   return [...apps.values()].sort((a, b) => a.name.localeCompare(b.name))
 }
 
+const PACKAGE_NAME = /^(?:@[a-z0-9~-][a-z0-9._~-]*\/)?[a-z0-9~-][a-z0-9._~-]*$/i
+const SEMVER =
+  /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?(\+[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$/
+
+/**
+ * An npm package name, scoped or not. A name becomes a path on this server
+ * when it is installed, so no segment may be empty, `.` or `..`.
+ */
+export function isPackageName(name: string): boolean {
+  return name.length <= 214 && PACKAGE_NAME.test(name)
+}
+
+/** A plain version, as the App Store installs it: no range, alias or URL. */
+export function isVersion(version: string): boolean {
+  return version.length <= 256 && SEMVER.test(version)
+}
+
 /** A list of apps as a peer sends it; what does not fit is left out. */
 export function parseInstalled(raw: unknown): InstalledApp[] {
   const list = isPlainObject(raw) && Array.isArray(raw.apps) ? raw.apps : []
@@ -77,8 +94,9 @@ export function parseInstalled(raw: unknown): InstalledApp[] {
     (a): a is InstalledApp =>
       isPlainObject(a) &&
       typeof a.name === 'string' &&
-      a.name !== '' &&
+      isPackageName(a.name) &&
       typeof a.version === 'string' &&
+      isVersion(a.version) &&
       typeof a.title === 'string' &&
       typeof a.plugin === 'boolean' &&
       typeof a.webapp === 'boolean' &&
