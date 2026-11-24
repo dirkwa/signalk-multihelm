@@ -223,7 +223,6 @@ export class DataSharer {
     return this.host.settings.paths.length > 0 || this.host.settings.connections.length > 0
   }
 
-  /** The paths to subscribe to on this server. */
   subscribePaths(): string[] {
     return this.host.settings.connections.length > 0 ? ['*'] : this.host.settings.paths
   }
@@ -294,7 +293,6 @@ export class DataSharer {
     this.send(client)
   }
 
-  /** Sends what came in since the last time. */
   flush(): void {
     for (const client of this.clients) {
       this.send(client)
@@ -447,9 +445,9 @@ export function relabel(server: { id: string; name: string }, delta: unknown): S
  */
 export const OWN_SOURCE_FRESH_MS = 30_000
 
-function hasFreshOwnSource(node: unknown, now: number): boolean {
+function ownSources(node: unknown): [string, string][] {
   if (!isPlainObject(node)) {
-    return false
+    return []
   }
   const sources = isPlainObject(node.values)
     ? Object.entries(node.values).map(([source, v]) => [
@@ -457,17 +455,45 @@ function hasFreshOwnSource(node: unknown, now: number): boolean {
         isPlainObject(v) ? v.timestamp : undefined
       ])
     : [[node.$source, node.timestamp]]
-  return sources.some(
-    ([source, timestamp]) =>
-      typeof source === 'string' &&
-      !source.startsWith(SHARED_SOURCE_PREFIX) &&
-      typeof timestamp === 'string' &&
-      // A clock ahead must not keep an own source fresh long after it went quiet.
-      Math.abs(now - Date.parse(timestamp)) <= OWN_SOURCE_FRESH_MS
+  return sources.filter(
+    (s): s is [string, string] =>
+      typeof s[0] === 'string' && !s[0].startsWith(SHARED_SOURCE_PREFIX) && typeof s[1] === 'string'
   )
 }
 
-/** The fields of `meta` this server has no metadata for yet. */
+/**
+ * Own readings aged by this server's clock: a source's clock may be off by
+ * any amount, so its timestamp only tells when a reading is new.
+ */
+export class OwnReadings {
+  /** Path and source → the timestamp last seen and when this server got that reading. */
+  private readonly seen = new Map<string, { timestamp: string; at: number }>()
+
+  constructor(private readonly local: (path: string) => unknown) {}
+
+  fresh(path: string, now: number): boolean {
+    let fresh = false
+    for (const [source, timestamp] of ownSources(this.local(path))) {
+      const key = `${path}\n${source}`
+      const last = this.seen.get(key)
+      let at = last?.at ?? Number.NEGATIVE_INFINITY
+      if (last?.timestamp !== timestamp) {
+        const stamped = Date.parse(timestamp)
+        const plausible = Math.abs(now - stamped) <= OWN_SOURCE_FRESH_MS
+        if (plausible) {
+          at = Math.min(stamped, now)
+        } else if (last) {
+          // A clock that is off: the reading is new, so it came in since the last look.
+          at = now
+        }
+        this.seen.set(key, { timestamp, at })
+      }
+      fresh ||= now - at <= OWN_SOURCE_FRESH_MS
+    }
+    return fresh
+  }
+}
+
 function missingMeta(
   meta: NonNullable<SharedUpdate['meta']>,
   local: (path: string) => unknown
@@ -491,13 +517,13 @@ function missingMeta(
 export function withoutOwn(
   updates: SharedUpdate[],
   local: (path: string) => unknown,
-  now: number,
+  fresh: (path: string) => boolean,
   held: (value: SharedValue) => void = () => undefined
 ): SharedUpdate[] {
   const kept: SharedUpdate[] = []
   for (const update of updates) {
     const values = update.values.filter((v) => {
-      if (!hasFreshOwnSource(local(v.path), now)) {
+      if (!fresh(v.path)) {
         return true
       }
       held({ $source: update.$source, timestamp: update.timestamp, path: v.path, value: v.value })
@@ -537,7 +563,11 @@ export class SharedDataReceiver {
   /** Peer id → the last values held back for a fresh source of this server's own, to stand in once it is quiet. */
   private readonly held = new Map<string, Map<string, SharedValue>>()
 
-  constructor(private readonly host: ReceiverHost) {}
+  private readonly own: OwnReadings
+
+  constructor(private readonly host: ReceiverHost) {
+    this.own = new OwnReadings(host.local)
+  }
 
   /**
    * Opens streams to peers that began to share, closes those of peers that
@@ -569,9 +599,7 @@ export class SharedDataReceiver {
   private standIn(): void {
     const now = Date.now()
     for (const values of this.held.values()) {
-      const due = [...values.entries()].filter(
-        ([, v]) => !hasFreshOwnSource(this.host.local(v.path), now)
-      )
+      const due = [...values.entries()].filter(([, v]) => !this.own.fresh(v.path, now))
       for (const [key] of due) {
         values.delete(key)
       }
@@ -672,7 +700,9 @@ export class SharedDataReceiver {
       this.held.set(peer.id, held)
     }
     const peerHeld = held
-    const updates = withoutOwn(relabel(peer, delta), this.host.local, Date.now(), (v) => {
+    const now = Date.now()
+    const fresh = (path: string): boolean => this.own.fresh(path, now)
+    const updates = withoutOwn(relabel(peer, delta), this.host.local, fresh, (v) => {
       peerHeld.set(`${v.$source}\n${v.path}`, v)
     })
     for (const update of updates) {

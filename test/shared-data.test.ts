@@ -21,6 +21,7 @@ import {
   withoutOwn,
   events,
   OWN_SOURCE_FRESH_MS,
+  OwnReadings,
   STALL_MS,
   sharedSource,
   sourcePart,
@@ -461,6 +462,7 @@ describe('data only one server sees', () => {
         }
       }
     }
+    const readings = new OwnReadings((p) => nodes[p])
     const kept = withoutOwn(
       [
         {
@@ -484,7 +486,7 @@ describe('data only one server sees', () => {
         }
       ],
       (p) => nodes[p],
-      now
+      (p) => readings.fresh(p, now)
     )
     expect(kept).toEqual([
       {
@@ -497,6 +499,26 @@ describe('data only one server sees', () => {
         meta: [{ path: 'new.path', value: { units: 'K' } }]
       }
     ])
+  })
+
+  it('ages an own reading by when it came in, whatever clock stamped it', () => {
+    const start = Date.parse(T)
+    const ahead = new Date(start + 3_600_000).toISOString()
+    const node = { value: 1, $source: 'n2k.c0ffee', timestamp: ahead }
+    const readings = new OwnReadings(() => node)
+    expect(readings.fresh('p', start)).toBe(false)
+    node.timestamp = new Date(start + 3_601_000).toISOString()
+    expect(readings.fresh('p', start + 1000)).toBe(true)
+    expect(readings.fresh('p', start + 1000 + OWN_SOURCE_FRESH_MS)).toBe(true)
+    expect(readings.fresh('p', start + 2000 + OWN_SOURCE_FRESH_MS)).toBe(false)
+    expect(readings.fresh('p', start + 3_601_000)).toBe(false)
+
+    const behind = { value: 1, $source: 'n2k.c0ffee', timestamp: T }
+    const late = new OwnReadings(() => behind)
+    expect(late.fresh('p', start + 10_000)).toBe(true)
+    expect(late.fresh('p', start + 20_000 + OWN_SOURCE_FRESH_MS)).toBe(false)
+    behind.timestamp = new Date(start + 1000).toISOString()
+    expect(late.fresh('p', start + 20_000 + OWN_SOURCE_FRESH_MS)).toBe(true)
   })
 
   it('gives a peer that begins to read the latest value of every shared path', async () => {
@@ -513,7 +535,7 @@ describe('data only one server sees', () => {
 
   it('stands in with a value it held back once its own source went quiet, without a new one coming', async () => {
     const s = await station('stand-in', { paths: ['tanks.*'], connections: [] })
-    let own = { value: 0.3, $source: 'tank.local', timestamp: new Date().toISOString() }
+    const own = { value: 0.3, $source: 'tank.local', timestamp: new Date().toISOString() }
     const got: SharedUpdate[] = []
     const r = new SharedDataReceiver({
       peers: () => [{ id: 'h', name: 'h', url: s.url, token: '' }],
@@ -532,15 +554,15 @@ describe('data only one server sees', () => {
     await new Promise((resolve) => setTimeout(resolve, 100))
     r.check()
     expect(got).toEqual([])
-    own = { ...own, timestamp: new Date(Date.now() - OWN_SOURCE_FRESH_MS - 1000).toISOString() }
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(Date.now() + OWN_SOURCE_FRESH_MS + 1000)
     r.check()
     expect(got.map((u) => u.values)).toEqual([[{ path: 'tanks.fuel.0.currentLevel', value: 0.4 }]])
     r.check()
+    clock.mockRestore()
     expect(got).toHaveLength(1)
   })
 
   it('takes the metadata fields it lacks, and sends fields that turn up later', async () => {
-    const now = Date.parse(T)
     const kept = withoutOwn(
       [
         {
@@ -551,7 +573,7 @@ describe('data only one server sees', () => {
         }
       ],
       () => ({ meta: { displayName: 'Diesel' } }),
-      now
+      () => false
     )
     expect(kept[0]?.meta).toEqual([{ path: 'tank', value: { units: 'ratio' } }])
 
@@ -603,7 +625,7 @@ describe('data only one server sees', () => {
 
   it('puts in nothing it held for a peer that is gone', async () => {
     const s = await station('gone', { paths: ['tanks.*'], connections: [] })
-    let own = { value: 0.3, $source: 'tank.local', timestamp: new Date().toISOString() }
+    const own = { value: 0.3, $source: 'tank.local', timestamp: new Date().toISOString() }
     let peers: SharingPeer[] = [{ id: 'g', name: 'g', url: s.url, token: '' }]
     const got: SharedUpdate[] = []
     const r = new SharedDataReceiver({
@@ -621,9 +643,10 @@ describe('data only one server sees', () => {
     s.sharer.offer(value('tank.1', 'tanks.fuel.0.currentLevel', 0.4))
     s.sharer.flush()
     await new Promise((resolve) => setTimeout(resolve, 100))
-    own = { ...own, timestamp: new Date(Date.now() - OWN_SOURCE_FRESH_MS - 1000).toISOString() }
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(Date.now() + OWN_SOURCE_FRESH_MS + 1000)
     peers = []
     r.check()
+    clock.mockRestore()
     expect(got).toEqual([])
   })
 
