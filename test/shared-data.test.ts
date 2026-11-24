@@ -511,4 +511,46 @@ describe('data only one server sees', () => {
     )
     expect(paths).toEqual(Array.from({ length: 20 }, (_, i) => `p.${String(i)}`))
   })
+
+  it('puts in nothing it held for a peer that is gone', async () => {
+    const s = await station('gone', { paths: ['tanks.*'], connections: [] })
+    let own = { value: 0.3, $source: 'tank.local', timestamp: new Date().toISOString() }
+    let peers: SharingPeer[] = [{ id: 'g', name: 'g', url: s.url, token: '' }]
+    const got: SharedUpdate[] = []
+    const r = new SharedDataReceiver({
+      peers: () => peers,
+      open: (peer) => openStream(peer, SHARED_DATA_ROUTE, peer.token),
+      inject: (updates) => {
+        got.push(...updates)
+      },
+      local: () => own,
+      debug: () => undefined
+    })
+    receivers.push(r)
+    r.check()
+    await new Promise((resolve) => setTimeout(resolve, 100))
+    s.sharer.offer(value('tank.1', 'tanks.fuel.0.currentLevel', 0.4))
+    s.sharer.flush()
+    await new Promise((resolve) => setTimeout(resolve, 100))
+    own = { ...own, timestamp: new Date(Date.now() - OWN_SOURCE_FRESH_MS - 1000).toISOString() }
+    peers = []
+    r.check()
+    expect(got).toEqual([])
+  })
+
+  it('counts metadata as sent only with a value that went out', () => {
+    const dropped: string[] = []
+    events(
+      [
+        {
+          $source: 's',
+          timestamp: T,
+          values: [{ path: 'huge', value: 'y'.repeat(300_000) }],
+          meta: [{ path: 'huge', value: { units: 'm' } }]
+        }
+      ],
+      (p) => dropped.push(p)
+    )
+    expect(dropped).toEqual(['huge'])
+  })
 })

@@ -130,7 +130,10 @@ function grouped(values: Iterable<SharedValue>): SharedUpdate[] {
  * goes one value at a time, and a single value too long for any event is
  * left out, since no receiver would take it.
  */
-export function events(updates: SharedUpdate[]): string[] {
+export function events(
+  updates: SharedUpdate[],
+  dropped: (path: string) => void = () => undefined
+): string[] {
   const out: string[] = []
   let batch: string[] = []
   let length = 0
@@ -164,6 +167,8 @@ export function events(updates: SharedUpdate[]): string[] {
       })
       if (one.length <= SENT_EVENT_LENGTH) {
         add(one)
+      } else {
+        dropped(v.path)
       }
     }
   }
@@ -276,14 +281,23 @@ export class DataSharer {
   }
 
   private sendUpdates(client: Client, updates: SharedUpdate[], replay = false): void {
-    const pieces = updates.map((u) => this.withMeta(u, client.metaSent))
-    for (const event of events(pieces)) {
+    const sending = new Map<string, string>()
+    const pieces = updates.map((u) => this.withMeta(u, client.metaSent, sending))
+    const out = events(pieces, (path) => sending.delete(path))
+    for (const [path, text] of sending) {
+      client.metaSent.set(path, text)
+    }
+    for (const event of out) {
       this.send(client, event, replay)
     }
   }
 
   /** A path's metadata goes along with a value whenever it differs from what this stream last got. */
-  private withMeta(update: SharedUpdate, sent: Map<string, string>): SharedUpdate {
+  private withMeta(
+    update: SharedUpdate,
+    sent: ReadonlyMap<string, string>,
+    sending: Map<string, string>
+  ): SharedUpdate {
     const meta: NonNullable<SharedUpdate['meta']> = []
     for (const { path } of update.values) {
       const known = this.host.meta(path)
@@ -298,7 +312,7 @@ export class DataSharer {
       }
       const text = JSON.stringify(value)
       if (Object.keys(value).length > 0 && sent.get(path) !== text) {
-        sent.set(path, text)
+        sending.set(path, text)
         meta.push({ path, value })
       }
     }
@@ -475,7 +489,6 @@ export class SharedDataReceiver {
    * stopped or moved, and puts in held values whose own source went quiet.
    */
   check(): void {
-    this.standIn()
     const wanted = new Map(this.host.peers().map((p) => [p.id, p]))
     for (const [id, reading] of this.readings) {
       const peer = wanted.get(id)
@@ -495,6 +508,7 @@ export class SharedDataReceiver {
         void this.read(reading)
       }
     }
+    this.standIn()
   }
 
   private standIn(): void {
