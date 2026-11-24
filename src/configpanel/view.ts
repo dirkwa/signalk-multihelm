@@ -119,3 +119,26 @@ export function ago(time: number | undefined, now: number): string {
   const hours = Math.round(minutes / 60)
   return hours < 36 ? `${String(hours)} h ago` : `${String(Math.round(hours / 24))} days ago`
 }
+
+/** The ids of the server's data connections, from `/skServer/providers`. */
+export function connectionIds(raw: unknown): string[] {
+  if (!Array.isArray(raw)) {
+    return []
+  }
+  return raw
+    .map((p) => (typeof p === 'object' && p !== null ? (p as { id?: unknown }).id : undefined))
+    .filter((id): id is string => typeof id === 'string' && id !== '')
+    .sort((a, b) => a.localeCompare(b))
+}
+
+/** Paths typed one per line, or separated by commas. */
+export function pathsFromText(text: string): string[] {
+  return [
+    ...new Set(
+      text
+        .split(/[\n,]/)
+        .map((p) => p.trim())
+        .filter(Boolean)
+    )
+  ]
+}

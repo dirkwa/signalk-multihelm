@@ -49,6 +49,7 @@ import {
   type Hello,
   type HelloFrom
 } from './peer-client.js'
+import type { SharingPeer } from './shared-data.js'
 import type { PairedByInfo } from './status.js'
 import type { MultihelmStore, PairedServer, Peer } from './store.js'
 
@@ -103,6 +104,8 @@ export interface MultihelmHost {
   stillRunning?: () => boolean
   /** What this server runs, for the peers to show. */
   versions?: () => { signalk?: string; multihelm?: string }
+  /** This server shares data of its own with the others. */
+  sharesData?: () => boolean
   debug: (msg: string) => void
   error: (msg: string) => void
 }
@@ -669,6 +672,19 @@ export class Multihelm {
       : { url: peer.url, token: peer.token, ca: peer.ca }
   }
 
+  /** The paired peers that answered lately and share data of their own, with their pairing token. */
+  sharingPeers(): SharingPeer[] {
+    return this.seenPeers(Date.now())
+      .filter(({ hello }) => hello.shares === true)
+      .map(({ peer, hello }) => ({
+        id: peer.id,
+        name: hello.name,
+        url: peer.url,
+        token: peer.token,
+        ...(peer.ca === undefined ? {} : { ca: peer.ca })
+      }))
+  }
+
   /** More than one server is set to be the master: the user should set one only. */
   masterConflict(): boolean {
     return this.masterCandidates().length > 1
@@ -774,7 +790,8 @@ export class Multihelm {
       master: this.host.isMaster(),
       ...this.standing(),
       ...(peer ? { seesStandby: peer.standby ?? 0 } : {}),
-      ...this.versions()
+      ...this.versions(),
+      ...(this.host.sharesData?.() === true ? { shares: true } : {})
     }
   }
 

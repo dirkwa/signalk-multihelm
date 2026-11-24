@@ -1,7 +1,7 @@
 /**
  * Routes under `/plugins/signalk-multihelm/`.
  *
- * Peers read `hello`, `manifest`, `file` and `vessel-settings` with the readonly device token
+ * Peers read `hello`, `manifest`, `file`, `vessel-settings` and `shared-data` with the readonly device token
  * they got when pairing, so those are registered with readonly access
  * (`router.access`, signalk-server 2.31 and later). Without it plugin routes
  * are admin-only, a readonly token cannot reach them, and `status` says
@@ -17,6 +17,7 @@ import { MASTER_ROUTE, type MasterProxy } from './master-proxy.js'
 import type { Multihelm } from './multihelm.js'
 import type { HelloFrom } from './peer-client.js'
 import type { SharedPluginConfig } from './shared-config.js'
+import { SHARED_DATA_ROUTE, type DataSharer } from './shared-data.js'
 import type { OwnAccessState, Status } from './status.js'
 import type { VesselSettings } from './vessel-settings.js'
 
@@ -74,7 +75,8 @@ export function registerRoutes(
   ownAccess: () => OwnAccessState = () => null,
   masterPlugins: () => PluginList | null = () => null,
   controlAccess: () => Status['controlAccess'] = () => null,
-  sharedPlugins: () => { list: PluginList; config: SharedPluginConfig } | null = () => null
+  sharedPlugins: () => { list: PluginList; config: SharedPluginConfig } | null = () => null,
+  dataSharer: () => DataSharer | null = () => null
 ): void {
   const scoped = (router as RouterWithAccess).access
   const available = typeof scoped === 'function'
@@ -158,6 +160,15 @@ export function registerRoutes(
       res.sendFile(file, { acceptRanges: true, dotfiles: 'allow' })
     })
   )
+
+  readonly.get(SHARED_DATA_ROUTE, (req, res) => {
+    const sharer = dataSharer()
+    if (!sharer) {
+      res.status(503).json({ error: 'Multihelm is not running' })
+      return
+    }
+    sharer.serve(req, res)
+  })
 
   const forwardToMaster: Handler = (req, res) => {
     const proxy = masterProxy()

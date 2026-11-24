@@ -164,6 +164,37 @@ the admin UI does, and uses the same admin access as the vessel settings
 (see below). Taking a plugin off the list leaves its settings on every
 server as they are.
 
+## Data only one server sees
+
+A server can have a source of its own that the others do not see, such as
+engine data from a J1939 bus or a whole NMEA 2000 bus in the engine room. In
+its Multihelm settings, under **Data only this server sees**, list the paths
+to share (one per line, `*` for any part, such as `propulsion.*`) or tick the
+data connections whose every value is to be shared. Every other paired
+server then shows those values, at most once a second per path and source,
+under the source `multihelm.<that server>.<source>`, such as
+`multihelm.engine-room-<server id>.n2k-er.23` (the server's name and its
+server id, since servers left with the default host name share it), with
+their units and display names.
+
+No master is involved: each server reads the others' shared data directly
+with its pairing token, so a change of master changes nothing here, and a
+server that goes away only stops sending. Values under a `multihelm.` source
+are never shared again, so every server may share the same paths without
+anything going round in circles. A server takes no shared value for a
+path it has a source of its own for, such as a bus two stations are on or a
+second GPS, so every path keeps one value there; once its own source has
+been quiet for 30 seconds, the shared one stands in. Sharing a whole
+connection therefore adds each value only where it is missing. Only values are shared: devices on such a
+bus are still operated from their own server. **Take the data the other
+servers share** turns it off on a server.
+
+The built-in **Signal K** data connection does the same between two servers
+without Multihelm: on the receiving server, point it at the other one, use
+**Request Access** there if it has security on, and keep the self mapping on
+its default, or the data shows up as another vessel. Connect in one
+direction only, or the two servers echo each other's data.
+
 ## Vessel data, metadata and source priorities from the master
 
 The vessel is described once, on the master. The other servers take over its
