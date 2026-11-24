@@ -288,23 +288,25 @@ export default function (app: ServerAPI): Plugin {
       }
     })
     const unsubscribes: Unsubscribes = []
-    ;(app.subscriptionmanager as SourcePolicySubscriptions).subscribe(
-      {
-        context: 'vessels.self' as Context,
-        subscribe: [{ path: '*' as Path, policy: 'instant' }]
-      },
-      unsubscribes,
-      (error) => {
-        app.error(`Multihelm: following this server's own data: ${String(error)}`)
-      },
-      (delta) => {
-        for (const update of delta.updates) {
-          receiver.noteOwn(update)
-        }
-      },
-      undefined,
-      'all'
-    )
+    receiver.followOwn((note) => {
+      ;(app.subscriptionmanager as SourcePolicySubscriptions).subscribe(
+        {
+          context: 'vessels.self' as Context,
+          subscribe: [{ path: '*' as Path, policy: 'instant' }]
+        },
+        unsubscribes,
+        (error) => {
+          app.error(`Multihelm: following this server's own data: ${String(error)}`)
+        },
+        (delta) => {
+          for (const update of delta.updates) {
+            note(update)
+          }
+        },
+        undefined,
+        'all'
+      )
+    })
     receiver.check()
     const timer = setInterval(() => {
       receiver.check()

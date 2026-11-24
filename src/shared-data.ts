@@ -473,7 +473,23 @@ export class OwnReadings {
 
   constructor(private readonly local: (path: string) => unknown) {}
 
-  /** An update of this vessel's deltas, as the server's subscription hands it over. */
+  private following = false
+
+  /**
+   * Starts following this vessel's own deltas: `subscribe` hands each update
+   * to the function it gets. What it hands over before it returns is the
+   * server's cache, values that did not come in now, so those are aged by
+   * their timestamps like a reading on a first look.
+   */
+  follow(subscribe: (note: (update: unknown) => void) => void): void {
+    subscribe((update) => {
+      if (this.following) {
+        this.note(update, Date.now())
+      }
+    })
+    this.following = true
+  }
+
   note(update: unknown, now: number): void {
     if (
       !isPlainObject(update) ||
@@ -611,9 +627,9 @@ export class SharedDataReceiver {
     this.standIn()
   }
 
-  /** Every update of this vessel's own deltas, as it comes in, so own readings age by this server's clock. */
-  noteOwn(update: unknown): void {
-    this.own.note(update, Date.now())
+  /** Follows this vessel's own deltas, so own readings age by this server's clock. */
+  followOwn(subscribe: (note: (update: unknown) => void) => void): void {
+    this.own.follow(subscribe)
   }
 
   private standIn(): void {

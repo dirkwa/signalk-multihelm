@@ -538,6 +538,29 @@ describe('data only one server sees', () => {
     expect(late.fresh('p', start + 60_000)).toBe(false)
   })
 
+  it('ages the values a subscription hands over from the cache by their timestamps', () => {
+    const now = Date.now()
+    const node = {
+      value: 1,
+      $source: 'n2k.c0ffee',
+      timestamp: new Date(now - OWN_SOURCE_FRESH_MS - 30_000).toISOString()
+    }
+    const cached = {
+      $source: node.$source,
+      timestamp: node.timestamp,
+      values: [{ path: 'p', value: 1 }]
+    }
+    const readings = new OwnReadings(() => node)
+    let live: (update: unknown) => void = () => undefined
+    readings.follow((note) => {
+      note(cached)
+      live = note
+    })
+    expect(readings.fresh('p', now)).toBe(false)
+    live(cached)
+    expect(readings.fresh('p', Date.now())).toBe(true)
+  })
+
   it('gives a peer that begins to read the latest value of every shared path', async () => {
     const s = await station('replay', { paths: ['tanks.*'], connections: [] })
     s.sharer.offer(value('tank.1', 'tanks.fuel.0.currentLevel', 0.5))
