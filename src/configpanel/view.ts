@@ -152,3 +152,65 @@ export function pathsFromText(text: string): string[] {
     )
   ]
 }
+
+/** The App Store's install route on this server; a scoped name keeps its `/`. */
+export function appInstallUrl(name: string, version: string): string {
+  const parts = name.split('/').map(encodeURIComponent).join('/')
+  return `/skServer/appstore/install/${parts}/${encodeURIComponent(version)}`
+}
+
+function compareIdentifiers(a: string, b: string): number {
+  const numeric = /^\d+$/
+  if (numeric.test(a) && numeric.test(b)) {
+    return Number(a) - Number(b)
+  }
+  if (numeric.test(a) !== numeric.test(b)) {
+    return numeric.test(a) ? -1 : 1
+  }
+  return a < b ? -1 : a > b ? 1 : 0
+}
+
+/** SemVer precedence: build metadata is ignored, a pre-release sorts before its release. */
+export function compareVersions(a: string, b: string): number {
+  const [coreA = '', preA] = a.split('+')[0]?.split(/-(.*)/s) ?? []
+  const [coreB = '', preB] = b.split('+')[0]?.split(/-(.*)/s) ?? []
+  const numsA = coreA.split('.')
+  const numsB = coreB.split('.')
+  for (let i = 0; i < 3; i++) {
+    const d = (Number(numsA[i]) || 0) - (Number(numsB[i]) || 0)
+    if (d !== 0) {
+      return d
+    }
+  }
+  if (preA === undefined || preB === undefined) {
+    return preA === preB ? 0 : preA === undefined ? 1 : -1
+  }
+  const partsA = preA.split('.')
+  const partsB = preB.split('.')
+  for (let i = 0; i < Math.min(partsA.length, partsB.length); i++) {
+    const d = compareIdentifiers(partsA[i] ?? '', partsB[i] ?? '')
+    if (d !== 0) {
+      return d
+    }
+  }
+  return partsA.length - partsB.length
+}
+
+export function newestVersion(versions: string[]): string {
+  return versions.reduce(
+    (newest, v) => (compareVersions(v, newest) > 0 ? v : newest),
+    versions[0] ?? ''
+  )
+}
+
+/** "USVMAIN 1.4.0, Salon 1.3.2" */
+export function serversText(servers: { name: string; version: string }[]): string {
+  return servers.map((s) => `${s.name} ${s.version}`).join(', ')
+}
+
+/** The App Store answers 404 for a package it does not offer, such as one installed from git. */
+export function installErrorText(message: string): string {
+  return message === 'HTTP 404'
+    ? 'The App Store does not offer this package; install it the way it was installed on the other server.'
+    : message
+}
