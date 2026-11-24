@@ -29,6 +29,21 @@ export class OwnServerAccess {
     return this.access.state === 'waiting-approval'
   }
 
+  /**
+   * Looks again at a request waiting for approval, which is otherwise done
+   * only when there is something to write: one the server has forgotten is
+   * replaced, so the settings never offer to approve a request that is gone.
+   */
+  recheck(): void {
+    if (this.access.state === 'waiting-approval') {
+      this.token().catch((error: unknown) => {
+        this.host.debug(
+          `Multihelm: access request on this server: ${error instanceof Error ? error.message : String(error)}`
+        )
+      })
+    }
+  }
+
   /** The identifier of the access request on this server, as Security -> Access Requests lists it. */
   requestId(): string {
     return `signalk-multihelm-self-${this.host.serverId}`
@@ -60,17 +75,22 @@ export class OwnServerAccess {
 
   private async ask(): Promise<string | null> {
     const base = this.host.ownUrl()
+    const request = (): Promise<AccessRequestResult> =>
+      requestAccess(
+        { url: base },
+        this.requestId(),
+        'Multihelm: write the settings that follow the master on this server',
+        'admin'
+      )
     let result: AccessRequestResult
     try {
       result =
         this.access.state === 'waiting-approval' && this.access.requestHref
           ? await pollAccess({ url: base }, this.access.requestHref)
-          : await requestAccess(
-              { url: base },
-              this.requestId(),
-              'Multihelm: write the settings that follow the master on this server',
-              'admin'
-            )
+          : await request()
+      if (result.kind === 'gone') {
+        result = await request()
+      }
     } catch (error) {
       this.host.debug(
         `Multihelm: access request on this server: ${error instanceof Error ? error.message : String(error)}`
@@ -90,6 +110,9 @@ export class OwnServerAccess {
       case 'denied':
         this.host.store.saveOwnAccess({ token: '', state: 'none' })
         this.access = { token: '', state: 'denied' }
+        return null
+      case 'gone':
+        this.save({ token: '', state: 'none' })
         return null
       case 'error':
         this.host.debug(`Multihelm: access request on this server: ${result.message}`)

@@ -1289,6 +1289,11 @@ export class Multihelm {
         delete peer.requestHref
         peer.lastError = 'the access request was denied'
         break
+      case 'gone':
+        peer.state = 'needs-pairing'
+        delete peer.requestHref
+        peer.lastError = 'the access request expired before it was approved'
+        break
       case 'error':
         peer.state = 'needs-pairing'
         peer.lastError = result.message

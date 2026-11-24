@@ -483,6 +483,8 @@ export type AccessRequestResult =
   | { kind: 'pending'; href: string }
   | { kind: 'approved'; token: string }
   | { kind: 'denied' }
+  /** The server no longer knows the request: it keeps them in memory, for an hour at most. */
+  | { kind: 'gone' }
   | { kind: 'error'; message: string }
 
 /** Ask the peer for a device token, readonly unless said otherwise. */
@@ -519,7 +521,7 @@ export async function pollAccess(peer: PeerAddress, href: string): Promise<Acces
     return interpretReply(await getJson(url, undefined, peer.ca))
   } catch (error) {
     if (error instanceof PeerHttpError && error.status === 404) {
-      return { kind: 'denied' }
+      return { kind: 'gone' }
     }
     throw error
   }

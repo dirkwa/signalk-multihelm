@@ -459,6 +459,32 @@ describe('a pairing waiting for approval', () => {
   })
 })
 
+describe('a pairing whose request the peer has forgotten', () => {
+  it('asks to be paired again', async () => {
+    const { server, url } = await listen((req, res) => {
+      res.setHeader('Content-Type', 'application/json')
+      if (req.method === 'POST' && req.url === '/signalk/v1/access/requests') {
+        res.statusCode = 202
+        res.end(JSON.stringify({ state: 'PENDING', href: '/signalk/v1/requests/1' }))
+      } else {
+        res.statusCode = 404
+        res.end('{}')
+      }
+    })
+    try {
+      const mh = new Multihelm(new MultihelmStore(path.join(root, 'forgotten')), quiet())
+      expect(await mh.pair(url)).toMatchObject({ state: 'waiting-approval' })
+      await mh.pollPairings()
+      expect(mh.peerInfo()[0]).toMatchObject({
+        state: 'needs-pairing',
+        lastError: 'the access request expired before it was approved'
+      })
+    } finally {
+      server.close()
+    }
+  })
+})
+
 describe('the overview of the servers', () => {
   let a: Station
   let b: Station
