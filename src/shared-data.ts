@@ -462,31 +462,46 @@ function ownSources(node: unknown): [string, string][] {
 }
 
 /**
- * Own readings aged by this server's clock: a source's clock may be off by
- * any amount, so its timestamp only tells when a reading is new.
+ * Own readings aged by this server's clock, from when each came in: a
+ * source's clock may be off by any amount. A reading that came in before
+ * this server followed them is aged by its timestamp, but only when that
+ * lies within the freshness window.
  */
 export class OwnReadings {
-  /** Path and source → the timestamp last seen and when this server got that reading. */
-  private readonly seen = new Map<string, { timestamp: string; at: number }>()
+  /** Path and source → when this server got its last reading. */
+  private readonly cameIn = new Map<string, number>()
 
   constructor(private readonly local: (path: string) => unknown) {}
+
+  /** An update of this vessel's deltas, as the server's subscription hands it over. */
+  note(update: unknown, now: number): void {
+    if (
+      !isPlainObject(update) ||
+      typeof update.$source !== 'string' ||
+      update.$source.startsWith(SHARED_SOURCE_PREFIX) ||
+      !Array.isArray(update.values)
+    ) {
+      return
+    }
+    for (const entry of update.values) {
+      if (isPlainObject(entry) && typeof entry.path === 'string') {
+        this.cameIn.set(`${entry.path}\n${update.$source}`, now)
+      }
+    }
+  }
 
   fresh(path: string, now: number): boolean {
     let fresh = false
     for (const [source, timestamp] of ownSources(this.local(path))) {
       const key = `${path}\n${source}`
-      const last = this.seen.get(key)
-      let at = last?.at ?? Number.NEGATIVE_INFINITY
-      if (last?.timestamp !== timestamp) {
+      let at = this.cameIn.get(key)
+      if (at === undefined) {
         const stamped = Date.parse(timestamp)
-        const plausible = Math.abs(now - stamped) <= OWN_SOURCE_FRESH_MS
-        if (plausible) {
-          at = Math.min(stamped, now)
-        } else if (last) {
-          // A clock that is off: the reading is new, so it came in since the last look.
-          at = now
-        }
-        this.seen.set(key, { timestamp, at })
+        at =
+          Math.abs(now - stamped) <= OWN_SOURCE_FRESH_MS
+            ? Math.min(stamped, now)
+            : Number.NEGATIVE_INFINITY
+        this.cameIn.set(key, at)
       }
       fresh ||= now - at <= OWN_SOURCE_FRESH_MS
     }
@@ -594,6 +609,11 @@ export class SharedDataReceiver {
       }
     }
     this.standIn()
+  }
+
+  /** Every update of this vessel's own deltas, as it comes in, so own readings age by this server's clock. */
+  noteOwn(update: unknown): void {
+    this.own.note(update, Date.now())
   }
 
   private standIn(): void {

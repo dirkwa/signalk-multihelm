@@ -503,22 +503,39 @@ describe('data only one server sees', () => {
 
   it('ages an own reading by when it came in, whatever clock stamped it', () => {
     const start = Date.parse(T)
-    const ahead = new Date(start + 3_600_000).toISOString()
-    const node = { value: 1, $source: 'n2k.c0ffee', timestamp: ahead }
-    const readings = new OwnReadings(() => node)
-    expect(readings.fresh('p', start)).toBe(false)
-    node.timestamp = new Date(start + 3_601_000).toISOString()
-    expect(readings.fresh('p', start + 1000)).toBe(true)
-    expect(readings.fresh('p', start + 1000 + OWN_SOURCE_FRESH_MS)).toBe(true)
-    expect(readings.fresh('p', start + 2000 + OWN_SOURCE_FRESH_MS)).toBe(false)
-    expect(readings.fresh('p', start + 3_601_000)).toBe(false)
+    const at = (ms: number) => new Date(start + ms).toISOString()
+    const reading = (stamp: string) => ({
+      $source: 'n2k.c0ffee',
+      timestamp: stamp,
+      values: [{ path: 'p', value: 1 }]
+    })
 
-    const behind = { value: 1, $source: 'n2k.c0ffee', timestamp: T }
+    const ahead = { value: 1, $source: 'n2k.c0ffee', timestamp: at(3_600_000) }
+    const early = new OwnReadings(() => ahead)
+    expect(early.fresh('p', start)).toBe(false)
+    ahead.timestamp = at(3_601_000)
+    early.note(reading(ahead.timestamp), start + 1000)
+    expect(early.fresh('p', start + 1000 + OWN_SOURCE_FRESH_MS)).toBe(true)
+    expect(early.fresh('p', start + 2000 + OWN_SOURCE_FRESH_MS)).toBe(false)
+    expect(early.fresh('p', start + 3_601_000)).toBe(false)
+
+    const quiet = { value: 1, $source: 'n2k.c0ffee', timestamp: at(3_600_000) }
+    const unseen = new OwnReadings(() => quiet)
+    expect(unseen.fresh('p', start)).toBe(false)
+    quiet.timestamp = at(3_601_000)
+    unseen.note(reading(quiet.timestamp), start + 1000)
+    expect(unseen.fresh('p', start + 40_000)).toBe(false)
+
+    const behind = { value: 1, $source: 'n2k.c0ffee', timestamp: at(-20_000) }
     const late = new OwnReadings(() => behind)
-    expect(late.fresh('p', start + 10_000)).toBe(true)
-    expect(late.fresh('p', start + 20_000 + OWN_SOURCE_FRESH_MS)).toBe(false)
-    behind.timestamp = new Date(start + 1000).toISOString()
+    expect(late.fresh('p', start)).toBe(true)
+    behind.timestamp = at(0)
+    late.note(reading(behind.timestamp), start + 20_000)
     expect(late.fresh('p', start + 20_000 + OWN_SOURCE_FRESH_MS)).toBe(true)
+    expect(late.fresh('p', start + 20_001 + OWN_SOURCE_FRESH_MS)).toBe(false)
+
+    late.note({ ...reading(at(0)), $source: 'multihelm.er-1.n2k.1' }, start + 60_000)
+    expect(late.fresh('p', start + 60_000)).toBe(false)
   })
 
   it('gives a peer that begins to read the latest value of every shared path', async () => {

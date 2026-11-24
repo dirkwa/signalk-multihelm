@@ -21,7 +21,8 @@ describe('the plugin', () => {
       },
       setPluginStatus: () => undefined,
       debug: () => undefined,
-      error: () => undefined
+      error: () => undefined,
+      subscriptionmanager: { subscribe: () => undefined }
     } as unknown as ServerAPI
     const plugin = createPlugin(app)
 
@@ -54,7 +55,8 @@ describe('the plugin', () => {
         statuses.push(s)
       },
       debug: () => undefined,
-      error: () => undefined
+      error: () => undefined,
+      subscriptionmanager: { subscribe: () => undefined }
     } as unknown as ServerAPI
     const plugin = createPlugin(app)
     plugin.start({ master: true }, () => undefined)
@@ -95,6 +97,45 @@ describe('the plugin', () => {
       { syncResources: false, takeSharedData: false, shareConnections: ['n2k-er'] },
       () => undefined
     )
+    expect(subscribed).toEqual([
+      {
+        command: { context: 'vessels.self', subscribe: [{ path: '*', policy: 'instant' }] },
+        policy: 'all'
+      }
+    ])
+    void plugin.stop()
+    expect(unsubscribed).toBe(1)
+    fs.rmSync(dataDir, { recursive: true, force: true })
+  })
+
+  it("follows this server's own values from every source while it takes shared data", () => {
+    const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'multihelm-plugin-'))
+    const subscribed: { command: unknown; policy: unknown }[] = []
+    let unsubscribed = 0
+    const app = {
+      getDataDirPath: () => dataDir,
+      emitPropertyValue: () => undefined,
+      setPluginStatus: () => undefined,
+      debug: () => undefined,
+      error: () => undefined,
+      subscriptionmanager: {
+        subscribe: (
+          command: unknown,
+          unsubscribes: (() => void)[],
+          _error: unknown,
+          _callback: unknown,
+          _user: unknown,
+          policy: unknown
+        ) => {
+          subscribed.push({ command, policy })
+          unsubscribes.push(() => {
+            unsubscribed++
+          })
+        }
+      }
+    } as unknown as ServerAPI
+    const plugin = createPlugin(app)
+    plugin.start({ syncResources: false }, () => undefined)
     expect(subscribed).toEqual([
       {
         command: { context: 'vessels.self', subscribe: [{ path: '*', policy: 'instant' }] },

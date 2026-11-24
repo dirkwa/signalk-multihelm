@@ -287,6 +287,24 @@ export default function (app: ServerAPI): Plugin {
         app.debug(msg)
       }
     })
+    const unsubscribes: Unsubscribes = []
+    ;(app.subscriptionmanager as SourcePolicySubscriptions).subscribe(
+      {
+        context: 'vessels.self' as Context,
+        subscribe: [{ path: '*' as Path, policy: 'instant' }]
+      },
+      unsubscribes,
+      (error) => {
+        app.error(`Multihelm: following this server's own data: ${String(error)}`)
+      },
+      (delta) => {
+        for (const update of delta.updates) {
+          receiver.noteOwn(update)
+        }
+      },
+      undefined,
+      'all'
+    )
     receiver.check()
     const timer = setInterval(() => {
       receiver.check()
@@ -297,6 +315,9 @@ export default function (app: ServerAPI): Plugin {
     return () => {
       clearInterval(timer)
       stopStatus()
+      for (const unsubscribe of unsubscribes) {
+        unsubscribe()
+      }
       receiver.stop()
     }
   }
