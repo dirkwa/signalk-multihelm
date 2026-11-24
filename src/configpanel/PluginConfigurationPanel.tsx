@@ -3,13 +3,13 @@ import { useCallback, useEffect, useRef, useState, type SyntheticEvent } from 'r
 import type { PeerInfo } from '../api.js'
 import type { Settings } from '../config.js'
 import type { AppElsewhere, AppsReport } from '../installed-apps.js'
+import { InstallWatch } from './install-watch.js'
 import type { PairedByInfo, Status } from '../status.js'
 import {
   accessRequestsUrl,
   ago,
   appInstallUrl,
   installErrorText,
-  installState,
   newestVersion,
   serversText,
   approveAccessUrl,
@@ -656,7 +656,8 @@ function AppsCard() {
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState<string | null>(null)
   const [installs, setInstalls] = useState<Record<string, 'pending' | 'done'>>({})
-  const pending = useRef(new Set<string>())
+  const [watching, setWatching] = useState(true)
+  const watcher = useRef<InstallWatch | null>(null)
 
   // Only the latest answer counts: an earlier one may still list an app set aside since.
   const loads = useRef(0)
@@ -679,43 +680,33 @@ function AppsCard() {
     void load()
   }, [load])
 
-  // The install route answers once the install is queued; the App Store's
-  // server events say how it ended. Open from the start, so the last event the
-  // server replays on connecting predates every install made here.
+  // Open from the start, so the event the server replays on connecting predates every install made here.
   useEffect(() => {
     const scheme = window.location.protocol === 'https:' ? 'wss' : 'ws'
-    const socket = new WebSocket(
-      `${scheme}://${window.location.host}/signalk/v1/stream?subscribe=none&serverevents=all`
-    )
-    socket.onmessage = (message: MessageEvent<unknown>) => {
-      let event: unknown
-      try {
-        event = typeof message.data === 'string' ? JSON.parse(message.data) : null
-      } catch {
-        return
-      }
-      const current = pending.current
-      const failed = [...current].filter((name) => installState(event, name) === 'failed')
-      const done = [...current].filter((name) => installState(event, name) === 'done')
-      if (failed.length === 0 && done.length === 0) {
-        return
-      }
-      for (const name of [...failed, ...done]) {
-        current.delete(name)
-      }
-      setInstalls((list) => {
-        const next = Object.fromEntries(Object.entries(list).filter(([n]) => !failed.includes(n)))
-        for (const name of done) {
-          next[name] = 'done'
+    const watch = new InstallWatch({
+      connect: (on) => {
+        const socket = new WebSocket(
+          `${scheme}://${window.location.host}/signalk/v1/stream?subscribe=none&serverevents=all`
+        )
+        socket.onmessage = (message: MessageEvent<unknown>) => {
+          on.message(message.data)
         }
-        return next
-      })
-      if (failed.length > 0) {
-        setError(`Installing ${failed.join(', ')} failed; the server log says why.`)
-      }
-    }
+        socket.onclose = () => {
+          on.close()
+        }
+        return socket
+      },
+      changed: setInstalls,
+      failed: (names) => {
+        setError(`Installing ${names.join(', ')} failed; the server log says why.`)
+      },
+      connected: setWatching
+    })
+    watch.start()
+    watcher.current = watch
     return () => {
-      socket.close()
+      watcher.current = null
+      watch.stop()
     }
   }, [])
 
@@ -738,11 +729,11 @@ function AppsCard() {
       if (!url) {
         throw new Error(`${app.name} ${version} is not a package the App Store installs`)
       }
+      watcher.current?.begin(app.name)
       await call(url, { method: 'POST' }).catch((e: unknown) => {
+        watcher.current?.cancel(app.name)
         throw new Error(installErrorText(errorText(e)))
       })
-      pending.current.add(app.name)
-      setInstalls((current) => ({ ...current, [app.name]: 'pending' }))
     })
 
   const setHidden = (name: string, hidden: boolean): Promise<void> =>
@@ -768,7 +759,9 @@ function AppsCard() {
           <span className="small text-body-secondary">
             {installs[app.name] === 'done'
               ? 'Installed; restart the server to start it.'
-              : 'Installing…'}
+              : watching
+                ? 'Installing…'
+                : 'Installing; see the App Store for when it is done.'}
           </span>
         ) : (
           <button

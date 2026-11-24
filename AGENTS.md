@@ -100,7 +100,8 @@ sets by hand on one server (see `README.md`).
   schema form (Module Federation, `vite.panel.config.ts`): pairing, peers,
   the role, the settings. It uses the admin UI's React through
   `host-shim/`, never a copy of its own, and reaches the server modules by
-  type imports only. `view.ts` holds what can be tested without a browser.
+  type imports only. `view.ts` holds what can be tested without a browser;
+  `install-watch.ts` follows App Store installs through the server events.
 
 ## Contracts other software depends on
 
