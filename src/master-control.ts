@@ -83,17 +83,22 @@ export class MasterControlAccess {
     if (this.control?.state === 'denied') {
       return null
     }
+    const request = (): Promise<AccessRequestResult> =>
+      requestAccess(
+        master.access,
+        this.requestId(),
+        'Multihelm: send commands to the master from another station',
+        'readwrite'
+      )
     let result: AccessRequestResult
     try {
       result =
         this.control?.state === 'waiting-approval' && this.control.requestHref
           ? await pollAccess(master.access, this.control.requestHref)
-          : await requestAccess(
-              master.access,
-              this.requestId(),
-              'Multihelm: send commands to the master from another station',
-              'readwrite'
-            )
+          : await request()
+      if (result.kind === 'gone') {
+        result = await request()
+      }
     } catch (error) {
       this.host.debug(`Multihelm: access request on the master: ${errorText(error)}`)
       return null
@@ -121,6 +126,9 @@ export class MasterControlAccess {
         // Asked again after a restart, as the user may have denied it by mistake.
         this.host.store.saveControlAccess(null)
         this.control = { masterId: master.id, token: '', state: 'denied' }
+        return null
+      case 'gone':
+        this.save(null)
         return null
       case 'error':
         this.host.debug(`Multihelm: access request on the master: ${result.message}`)

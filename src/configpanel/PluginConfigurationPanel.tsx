@@ -7,6 +7,7 @@ import {
   accessRequestsUrl,
   ago,
   approveAccessUrl,
+  approveErrorText,
   connectionIds,
   pathsFromText,
   peerName,
@@ -134,6 +135,8 @@ export default function PluginConfigurationPanel({ configuration, save }: Props)
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ permissions: 'admin' })
+      }).catch((error: unknown) => {
+        throw new Error(approveErrorText(errorText(error)))
       })
     )
   }

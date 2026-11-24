@@ -181,6 +181,7 @@ export default function (app: ServerAPI): Plugin {
   }
 
   function ownAccessState(): OwnAccessState {
+    ownAccess?.recheck()
     if (ownAccess?.waitingForApproval()) {
       return { state: 'waiting-approval', request: ownAccess.requestId() }
     }

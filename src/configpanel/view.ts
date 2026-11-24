@@ -84,6 +84,16 @@ export function peerName(peer: PeerInfo, discovered: DiscoveredServer[]): string
 }
 
 /** Approves an access request on the server the admin UI runs on. */
+/**
+ * Signal K answers an approval with 404 or 500 when it no longer holds the
+ * request as pending, after a restart for one; Multihelm then asks anew.
+ */
+export function approveErrorText(message: string): string {
+  return /^HTTP (404|500)$/.test(message)
+    ? 'This request is no longer waiting on the server. Multihelm asks again; approve the new one in a moment.'
+    : message
+}
+
 export function approveAccessUrl(request: string): string {
   return `/skServer/security/access/requests/${encodeURIComponent(request)}/approved`
 }

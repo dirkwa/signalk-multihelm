@@ -4,6 +4,7 @@ import type { PeerInfo } from '../src/api.js'
 import {
   ago,
   approveAccessUrl,
+  approveErrorText,
   peerName,
   roleNotice,
   unpairedServers,
@@ -126,6 +127,12 @@ describe('the configuration panel', () => {
     expect(ago(now - 5 * 60_000, now)).toBe('5 min ago')
     expect(ago(now - 3 * 3_600_000, now)).toBe('3 h ago')
     expect(ago(now - 3 * 86_400_000, now)).toBe('3 days ago')
+  })
+
+  it('explains a failed approval of a request the server no longer holds', () => {
+    expect(approveErrorText('HTTP 500')).toMatch(/no longer waiting/)
+    expect(approveErrorText('HTTP 404')).toMatch(/no longer waiting/)
+    expect(approveErrorText('HTTP 403')).toBe('HTTP 403')
   })
 
   it('approves the request on the server the admin UI runs on', () => {
