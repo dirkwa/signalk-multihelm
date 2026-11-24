@@ -227,15 +227,14 @@ export function serversText(servers: { name: string; version: string }[]): strin
   return servers.map((s) => `${s.name} ${s.version}`).join(', ')
 }
 
-/** The App Store answers 404 for a package it does not offer, such as one installed from git. */
 export type InstallState = 'pending' | 'done' | 'failed'
 
 /**
- * Where an App Store install of `name` stands, from an `APP_STORE_CHANGED`
- * server event; null when the event does not say. The install route answers
- * as soon as the install is queued, so the outcome only arrives this way.
+ * The App Store installs an `APP_STORE_CHANGED` server event lists, by
+ * package; null for any other event. An entry stays listed after its install
+ * ended, until the server restarts, so a result may be an earlier attempt's.
  */
-export function installState(event: unknown, name: string): InstallState | null {
+export function installStates(event: unknown): Map<string, InstallState> | null {
   if (typeof event !== 'object' || event === null) {
     return null
   }
@@ -244,21 +243,32 @@ export function installState(event: unknown, name: string): InstallState | null 
     return null
   }
   const installing = (data as { installing?: unknown }).installing
-  const entry = Array.isArray(installing)
-    ? (installing as unknown[]).find(
-        (e): e is Record<string, unknown> =>
-          typeof e === 'object' && e !== null && (e as { name?: unknown }).name === name
-      )
-    : undefined
-  if (!entry || entry.isRemove === true) {
-    return null
+  const states = new Map<string, InstallState>()
+  for (const entry of Array.isArray(installing) ? (installing as unknown[]) : []) {
+    if (typeof entry !== 'object' || entry === null) {
+      continue
+    }
+    const e = entry as Record<string, unknown>
+    if (typeof e.name !== 'string' || e.isRemove === true) {
+      continue
+    }
+    states.set(
+      e.name,
+      e.isWaiting === true || e.isInstalling === true
+        ? 'pending'
+        : e.installFailed === true
+          ? 'failed'
+          : 'done'
+    )
   }
-  if (entry.isWaiting === true || entry.isInstalling === true) {
-    return 'pending'
-  }
-  return entry.installFailed === true ? 'failed' : 'done'
+  return states
 }
 
+export function installState(event: unknown, name: string): InstallState | null {
+  return installStates(event)?.get(name) ?? null
+}
+
+/** The App Store answers 404 for a package it does not offer, such as one installed from git. */
 export function installErrorText(message: string): string {
   return message === 'HTTP 404'
     ? 'The App Store does not offer this package; install it the way it was installed on the other server.'

@@ -49,6 +49,7 @@ describe('following App Store installs', () => {
 
   it('stays pending while the install runs, then reports it done', () => {
     const t = watch()
+    t.sockets[0]?.send([])
     t.w.begin('a')
     expect(t.last()).toEqual({ a: 'pending' })
     t.sockets[0]?.send([{ name: 'a', isWaiting: true }])
@@ -61,6 +62,7 @@ describe('following App Store installs', () => {
 
   it('counts an end reported before the install route answered', () => {
     const t = watch()
+    t.sockets[0]?.send([{ name: 'b' }])
     t.w.begin('a')
     t.sockets[0]?.send([{ name: 'a', installFailed: true }])
     expect(t.last()).toEqual({})
@@ -69,6 +71,7 @@ describe('following App Store installs', () => {
 
   it('forgets an install the App Store refused', () => {
     const t = watch()
+    t.sockets[0]?.send([])
     t.w.begin('a')
     t.w.cancel('a')
     expect(t.last()).toEqual({})
@@ -78,16 +81,54 @@ describe('following App Store installs', () => {
 
   it('opens the socket again after it closed, and settles the install from the replayed event', () => {
     const t = watch()
+    t.sockets[0]?.send([])
     t.w.begin('a')
     t.sockets[0]?.drop()
-    expect(t.connected).toEqual([false])
+    expect(t.connected).toEqual([true, false])
     expect(t.last()).toEqual({ a: 'pending' })
     vi.advanceTimersByTime(1_000)
     expect(t.sockets).toHaveLength(2)
     t.sockets[1]?.send([{ name: 'a' }])
-    expect(t.connected).toEqual([false, true])
+    expect(t.connected).toEqual([true, false, true])
     expect(t.last()).toEqual({ a: 'done' })
     expect(t.failed).toEqual([])
+  })
+
+  it('takes no earlier attempt’s result for a retry, even when replayed on reconnecting', () => {
+    const t = watch()
+    t.sockets[0]?.send([{ name: 'a', installFailed: true }])
+    t.w.begin('a')
+    t.sockets[0]?.drop()
+    vi.advanceTimersByTime(1_000)
+    t.sockets[1]?.send([{ name: 'a', installFailed: true }])
+    expect(t.last()).toEqual({ a: 'pending' })
+    expect(t.failed).toEqual([])
+    t.sockets[1]?.send([{ name: 'a', isInstalling: true }])
+    t.sockets[1]?.send([{ name: 'a' }])
+    expect(t.last()).toEqual({ a: 'done' })
+    expect(t.failed).toEqual([])
+  })
+
+  it('takes no earlier success for a new attempt, and reports the new one failing', () => {
+    const t = watch()
+    t.sockets[0]?.send([{ name: 'a' }])
+    t.w.begin('a')
+    t.sockets[0]?.send([{ name: 'a' }])
+    expect(t.last()).toEqual({ a: 'pending' })
+    t.sockets[0]?.send([{ name: 'a', isWaiting: true }])
+    t.sockets[0]?.send([{ name: 'a', installFailed: true }])
+    expect(t.last()).toEqual({})
+    expect(t.failed).toEqual([['a']])
+  })
+
+  it('takes no result before it knows what the App Store listed', () => {
+    const t = watch()
+    t.w.begin('a')
+    t.sockets[0]?.send([{ name: 'a', installFailed: true }])
+    expect(t.failed).toEqual([])
+    t.sockets[0]?.send([{ name: 'a', isInstalling: true }])
+    t.sockets[0]?.send([{ name: 'a' }])
+    expect(t.last()).toEqual({ a: 'done' })
   })
 
   it('waits longer each time the socket closes without an event', () => {
