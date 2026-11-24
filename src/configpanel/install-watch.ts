@@ -12,7 +12,7 @@ export interface EventSocket {
 export interface InstallWatchHost {
   connect: (on: SocketEvents) => EventSocket
   /** The apps whose install is under way, and those installed since. */
-  changed: (installs: Record<string, 'pending' | 'done'>) => void
+  changed: (installs: Record<string, WatchedState>) => void
   failed: (names: string[]) => void
   /** Whether the App Store's events reach this page; while not, an install's end goes unseen. */
   connected?: (connected: boolean) => void
@@ -27,8 +27,14 @@ const RETRY_MAX_MS = 30_000
  * opened again, and the event the server replays on connecting settles any
  * install that ended meanwhile; a lost connection never counts as a failure.
  */
+/**
+ * `unknown`: the connection dropped before this attempt was seen under way,
+ * so its result cannot be told from an earlier one's until it is seen so.
+ */
+export type WatchedState = 'pending' | 'done' | 'unknown'
+
 interface Install {
-  state: 'pending' | 'done'
+  state: WatchedState
   /** Whether a result now is this attempt's: none was listed before it, or it was seen under way. */
   current: boolean
 }
@@ -66,9 +72,10 @@ export class InstallWatch {
    * result there, so its result counts only once this attempt was seen under way.
    */
   begin(name: string): void {
+    const current = this.listed !== null && !this.listed.has(name)
     this.installs.set(name, {
-      state: 'pending',
-      current: this.listed !== null && !this.listed.has(name)
+      state: current || this.socket !== null ? 'pending' : 'unknown',
+      current
     })
     this.report()
   }
@@ -96,6 +103,7 @@ export class InstallWatch {
         }
         this.socket = null
         this.host.connected?.(false)
+        this.giveUpUnseen()
         this.retry = setTimeout(() => {
           this.retry = null
           if (!this.stopped) {
@@ -106,6 +114,19 @@ export class InstallWatch {
       }
     })
     this.socket = socket
+  }
+
+  private giveUpUnseen(): void {
+    let change = false
+    for (const install of this.installs.values()) {
+      if (install.state === 'pending' && !install.current) {
+        install.state = 'unknown'
+        change = true
+      }
+    }
+    if (change) {
+      this.report()
+    }
   }
 
   private handle(data: unknown): void {
@@ -123,9 +144,13 @@ export class InstallWatch {
     const failed: string[] = []
     let change = false
     for (const [name, install] of this.installs) {
-      const now = install.state === 'pending' ? states.get(name) : undefined
+      const now = install.state === 'done' ? undefined : states.get(name)
       if (now === 'pending') {
         install.current = true
+        if (install.state === 'unknown') {
+          install.state = 'pending'
+          change = true
+        }
       } else if (now !== undefined && install.current) {
         if (now === 'done') {
           install.state = 'done'

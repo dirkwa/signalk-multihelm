@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import {
   InstallWatch,
+  type WatchedState,
   type EventSocket,
   type SocketEvents
 } from '../src/configpanel/install-watch.js'
@@ -22,7 +23,7 @@ class FakeSocket implements EventSocket {
 
 function watch() {
   const sockets: FakeSocket[] = []
-  const states: Record<string, 'pending' | 'done'>[] = []
+  const states: Record<string, WatchedState>[] = []
   const failed: string[][] = []
   const connected: boolean[] = []
   const w = new InstallWatch({
@@ -101,9 +102,10 @@ describe('following App Store installs', () => {
     t.sockets[0]?.drop()
     vi.advanceTimersByTime(1_000)
     t.sockets[1]?.send([{ name: 'a', installFailed: true }])
-    expect(t.last()).toEqual({ a: 'pending' })
+    expect(t.last()).toEqual({ a: 'unknown' })
     expect(t.failed).toEqual([])
     t.sockets[1]?.send([{ name: 'a', isInstalling: true }])
+    expect(t.last()).toEqual({ a: 'pending' })
     t.sockets[1]?.send([{ name: 'a' }])
     expect(t.last()).toEqual({ a: 'done' })
     expect(t.failed).toEqual([])
@@ -129,6 +131,55 @@ describe('following App Store installs', () => {
     t.sockets[0]?.send([{ name: 'a', isInstalling: true }])
     t.sockets[0]?.send([{ name: 'a' }])
     expect(t.last()).toEqual({ a: 'done' })
+  })
+
+  it('says it cannot know how a retry ended when the connection dropped before it was seen', () => {
+    const t = watch()
+    t.sockets[0]?.send([{ name: 'a', installFailed: true }])
+    t.w.begin('a')
+    t.sockets[0]?.drop()
+    expect(t.last()).toEqual({ a: 'unknown' })
+    vi.advanceTimersByTime(1_000)
+    t.sockets[1]?.send([{ name: 'a', installFailed: true }])
+    expect(t.last()).toEqual({ a: 'unknown' })
+    expect(t.failed).toEqual([])
+    t.w.begin('a')
+    expect(t.last()).toEqual({ a: 'pending' })
+  })
+
+  it('leaves a retry begun while disconnected unknown when it ends before the connection is back', () => {
+    const t = watch()
+    t.sockets[0]?.send([{ name: 'a', installFailed: true }])
+    t.sockets[0]?.drop()
+    t.w.begin('a')
+    expect(t.last()).toEqual({ a: 'unknown' })
+    vi.advanceTimersByTime(1_000)
+    t.sockets[1]?.send([{ name: 'a' }])
+    expect(t.last()).toEqual({ a: 'unknown' })
+    expect(t.failed).toEqual([])
+  })
+
+  it('follows an install begun while disconnected of a package not listed before', () => {
+    const t = watch()
+    t.sockets[0]?.send([])
+    t.sockets[0]?.drop()
+    t.w.begin('a')
+    expect(t.last()).toEqual({ a: 'pending' })
+    vi.advanceTimersByTime(1_000)
+    t.sockets[1]?.send([{ name: 'a' }])
+    expect(t.last()).toEqual({ a: 'done' })
+  })
+
+  it('keeps waiting across a dropped connection for an attempt it saw under way', () => {
+    const t = watch()
+    t.sockets[0]?.send([{ name: 'a' }])
+    t.w.begin('a')
+    t.sockets[0]?.send([{ name: 'a', isInstalling: true }])
+    t.sockets[0]?.drop()
+    expect(t.last()).toEqual({ a: 'pending' })
+    vi.advanceTimersByTime(1_000)
+    t.sockets[1]?.send([{ name: 'a', installFailed: true }])
+    expect(t.failed).toEqual([['a']])
   })
 
   it('waits longer each time the socket closes without an event', () => {

@@ -3,7 +3,7 @@ import { useCallback, useEffect, useRef, useState, type SyntheticEvent } from 'r
 import type { PeerInfo } from '../api.js'
 import type { Settings } from '../config.js'
 import type { AppElsewhere, AppsReport } from '../installed-apps.js'
-import { InstallWatch } from './install-watch.js'
+import { InstallWatch, type WatchedState } from './install-watch.js'
 import type { PairedByInfo, Status } from '../status.js'
 import {
   accessRequestsUrl,
@@ -655,7 +655,7 @@ function AppsCard() {
   const [report, setReport] = useState<AppsReport | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState<string | null>(null)
-  const [installs, setInstalls] = useState<Record<string, 'pending' | 'done'>>({})
+  const [installs, setInstalls] = useState<Record<string, WatchedState>>({})
   const [watching, setWatching] = useState(true)
   const watcher = useRef<InstallWatch | null>(null)
 
@@ -754,25 +754,27 @@ function AppsCard() {
           {app.name} · {detail}
         </div>
       </div>
-      {actions &&
-        (installs[app.name] ? (
-          <span className="small text-body-secondary">
-            {installs[app.name] === 'done'
-              ? 'Installed; restart the server to start it.'
+      {actions && installs[app.name] && (
+        <span className="small text-body-secondary">
+          {installs[app.name] === 'done'
+            ? 'Installed; restart the server to start it.'
+            : installs[app.name] === 'unknown'
+              ? 'Whether the install went through is not known here; see the App Store.'
               : watching
                 ? 'Installing…'
                 : 'Installing; see the App Store for when it is done.'}
-          </span>
-        ) : (
-          <button
-            type="button"
-            className="btn btn-sm btn-primary"
-            disabled={busy !== null}
-            onClick={() => void install(app)}
-          >
-            {busy === app.name ? 'Installing…' : 'Install'}
-          </button>
-        ))}
+        </span>
+      )}
+      {actions && (!installs[app.name] || installs[app.name] === 'unknown') && (
+        <button
+          type="button"
+          className="btn btn-sm btn-primary"
+          disabled={busy !== null}
+          onClick={() => void install(app)}
+        >
+          {busy === app.name ? 'Installing…' : 'Install'}
+        </button>
+      )}
       <button
         type="button"
         className="btn btn-sm btn-outline-secondary"
