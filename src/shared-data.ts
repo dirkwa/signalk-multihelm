@@ -78,9 +78,27 @@ export function shareSettings(paths: unknown, connections: unknown): ShareSettin
   return { paths: clean(paths), connections: clean(connections) }
 }
 
-/** A part of a `$source`: letters, digits, `_`, `-`, and `.` where `dots` allows. */
-function sourcePart(text: string, dots: boolean): string {
-  return text.replace(dots ? /[^\w.-]/g : /[^\w-]/g, '-') || '-'
+/**
+ * A part of a `$source`: letters, digits, `-`, and `.` where `dots` allows,
+ * stay as they are; `_` is doubled and any other character becomes
+ * `_<hex code point>_`, so two different names never meet. An empty part
+ * is `_`, which nothing else becomes.
+ */
+export function sourcePart(text: string, dots: boolean): string {
+  if (text === '') {
+    return '_'
+  }
+  let out = ''
+  for (const char of text) {
+    if (char === '_') {
+      out += '__'
+    } else if (/[A-Za-z0-9-]/.test(char) || (dots && char === '.')) {
+      out += char
+    } else {
+      out += `_${(char.codePointAt(0) ?? 0).toString(16)}_`
+    }
+  }
+  return out
 }
 
 /** Servers left with the default host name share it, so the server id goes along. */

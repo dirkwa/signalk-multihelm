@@ -20,6 +20,7 @@ import {
   events,
   OWN_SOURCE_FRESH_MS,
   sharedSource,
+  sourcePart,
   shareSettings,
   type ShareSettings,
   type SharedUpdate,
@@ -133,7 +134,7 @@ describe('data only one server sees', () => {
     expect(matches('environmentXwater.temperature')).toBe(false)
     expect(matches('navigation.position')).toBe(false)
     expect(sharedSource({ id: '3f2a1c9d-0000', name: 'engine room' }, 'n2k-er.23')).toBe(
-      'multihelm.engine-room-3f2a1c9d-0000.n2k-er.23'
+      'multihelm.engine_20_room-3f2a1c9d-0000.n2k-er.23'
     )
     expect(shareSettings([' propulsion.* ', '', 3], 'x')).toEqual({
       paths: ['propulsion.*'],
@@ -245,7 +246,7 @@ describe('data only one server sees', () => {
         ]
       })
     ).toEqual([
-      { $source: 'multihelm.p-abcdef.a-b', timestamp: T, values: [{ path: 'c', value: 2 }] }
+      { $source: 'multihelm.p-abcdef.a_2f_b', timestamp: T, values: [{ path: 'c', value: 2 }] }
     ])
     const delta = { updates: [value('n2k.0', 'a', 1)] }
     expect(relabel({ id: '111111-aaaa', name: 'raspberrypi' }, delta)[0]?.$source).not.toBe(
@@ -552,5 +553,25 @@ describe('data only one server sees', () => {
       (p) => dropped.push(p)
     )
     expect(dropped).toEqual(['huge'])
+  })
+
+  it('keeps ordinary source names, and never gives two names the same part', () => {
+    expect(sourcePart('n2k-er.23', true)).toBe('n2k-er.23')
+    const names = [
+      'a/b',
+      'a-b',
+      'a_b',
+      'a__b',
+      'a_2f_b',
+      'a.b',
+      '',
+      '_',
+      'a b',
+      'a€b',
+      '@signalk/x'
+    ]
+    const parts = names.map((n) => sourcePart(n, true))
+    expect(new Set(parts).size).toBe(names.length)
+    expect(sourcePart('a.b', false)).not.toBe(sourcePart('a_2e_b', false))
   })
 })
