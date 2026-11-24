@@ -170,10 +170,18 @@ export function appInstallUrl(name: string, version: string): string | null {
   return `/skServer/appstore/install/${parts}/${encodeURIComponent(version)}`
 }
 
+/** Digit strings of any length, exactly: a valid version has no leading zeros. */
+function compareNumbers(a: string, b: string): number {
+  if (a.length !== b.length) {
+    return a.length < b.length ? -1 : 1
+  }
+  return a < b ? -1 : a > b ? 1 : 0
+}
+
 function compareIdentifiers(a: string, b: string): number {
   const numeric = /^\d+$/
   if (numeric.test(a) && numeric.test(b)) {
-    return Number(a) - Number(b)
+    return compareNumbers(a, b)
   }
   if (numeric.test(a) !== numeric.test(b)) {
     return numeric.test(a) ? -1 : 1
@@ -188,7 +196,7 @@ export function compareVersions(a: string, b: string): number {
   const numsA = coreA.split('.')
   const numsB = coreB.split('.')
   for (let i = 0; i < 3; i++) {
-    const d = (Number(numsA[i]) || 0) - (Number(numsB[i]) || 0)
+    const d = compareNumbers(numsA[i] ?? '0', numsB[i] ?? '0')
     if (d !== 0) {
       return d
     }
@@ -220,6 +228,37 @@ export function serversText(servers: { name: string; version: string }[]): strin
 }
 
 /** The App Store answers 404 for a package it does not offer, such as one installed from git. */
+export type InstallState = 'pending' | 'done' | 'failed'
+
+/**
+ * Where an App Store install of `name` stands, from an `APP_STORE_CHANGED`
+ * server event; null when the event does not say. The install route answers
+ * as soon as the install is queued, so the outcome only arrives this way.
+ */
+export function installState(event: unknown, name: string): InstallState | null {
+  if (typeof event !== 'object' || event === null) {
+    return null
+  }
+  const { type, data } = event as { type?: unknown; data?: unknown }
+  if (type !== 'APP_STORE_CHANGED' || typeof data !== 'object' || data === null) {
+    return null
+  }
+  const installing = (data as { installing?: unknown }).installing
+  const entry = Array.isArray(installing)
+    ? (installing as unknown[]).find(
+        (e): e is Record<string, unknown> =>
+          typeof e === 'object' && e !== null && (e as { name?: unknown }).name === name
+      )
+    : undefined
+  if (!entry || entry.isRemove === true) {
+    return null
+  }
+  if (entry.isWaiting === true || entry.isInstalling === true) {
+    return 'pending'
+  }
+  return entry.installFailed === true ? 'failed' : 'done'
+}
+
 export function installErrorText(message: string): string {
   return message === 'HTTP 404'
     ? 'The App Store does not offer this package; install it the way it was installed on the other server.'

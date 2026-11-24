@@ -113,14 +113,22 @@ export interface LocalAppsHost {
 /** This server's own apps, read through its REST API and kept for a minute. */
 export class LocalApps {
   private cached: { at: number; apps: InstalledApp[] } | null = null
+  private reading: Promise<InstalledApp[] | null> | null = null
 
   constructor(private readonly host: LocalAppsHost) {}
 
   /** Null while this server's admin access waits for approval. */
-  async list(now = Date.now()): Promise<InstalledApp[] | null> {
+  list(now = Date.now()): Promise<InstalledApp[] | null> {
     if (this.cached && now - this.cached.at < LIST_MAX_AGE_MS) {
-      return this.cached.apps
+      return Promise.resolve(this.cached.apps)
     }
+    this.reading ??= this.read(now).finally(() => {
+      this.reading = null
+    })
+    return this.reading
+  }
+
+  private async read(now: number): Promise<InstalledApp[] | null> {
     const token = await this.host.token()
     if (token === null) {
       return null

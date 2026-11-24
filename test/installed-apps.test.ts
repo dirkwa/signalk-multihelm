@@ -325,6 +325,22 @@ describe('the apps on the servers of the boat', () => {
       expect(reads - before).toBe(2)
     })
 
+    it('reads its own list once for requests that arrive together', async () => {
+      const local = new LocalApps({ token: () => Promise.resolve('admin'), ownUrl: () => own.url })
+      const before = reads
+      const lists = await Promise.all([local.list(), local.list(), local.list()])
+      expect(reads - before).toBe(1)
+      expect(lists[1]).toBe(lists[0])
+    })
+
+    it('reads again after a read that failed', async () => {
+      let token: () => Promise<string | null> = () => Promise.reject(new Error('no access'))
+      const local = new LocalApps({ token: () => token(), ownUrl: () => own.url })
+      await expect(local.list()).rejects.toThrow('no access')
+      token = () => Promise.resolve('admin')
+      expect((await local.list())?.length).toBeGreaterThan(0)
+    })
+
     it('keeps the apps not wanted here, and takes them back', async () => {
       const put = (body: unknown) =>
         fetch(`${waiting.url}${ROUTE_PREFIX}/apps/hidden`, {
