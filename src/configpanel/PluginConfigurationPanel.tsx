@@ -647,16 +647,21 @@ function SettingsCard({ configuration, save }: Props) {
   const [settings, setSettings] = useState(() => withDefaults(configuration))
   const [pathsText, setPathsText] = useState(() => settings.sharePaths.join('\n'))
   const [connections, setConnections] = useState<string[] | null>(null)
-  useEffect(() => {
+  const [connectionsError, setConnectionsError] = useState<string | null>(null)
+  const loadConnections = useCallback(() => {
+    setConnectionsError(null)
     call('/skServer/providers').then(
       (raw) => {
         setConnections(connectionIds(raw))
       },
-      () => {
-        setConnections([])
+      (error: unknown) => {
+        setConnectionsError(errorText(error))
       }
     )
   }, [])
+  useEffect(() => {
+    loadConnections()
+  }, [loadConnections])
   const listedConnections = [
     ...new Set([...(connections ?? []), ...settings.shareConnections])
   ].sort((a, b) => a.localeCompare(b))
@@ -791,7 +796,20 @@ function SettingsCard({ configuration, save }: Props) {
         </div>
         <div className="mb-3">
           <div className="form-label">Share everything from these connections</div>
-          {connections === null && <div className="form-text">Loading the connections…</div>}
+          {connectionsError !== null ? (
+            <div className="text-danger mb-2">
+              Cannot read this server&apos;s connections: {connectionsError}{' '}
+              <button
+                type="button"
+                className="btn btn-sm btn-outline-secondary"
+                onClick={loadConnections}
+              >
+                Try again
+              </button>
+            </div>
+          ) : (
+            connections === null && <div className="form-text">Loading the connections…</div>
+          )}
           {listedConnections.map((id) => (
             <div className="form-check" key={id}>
               <input

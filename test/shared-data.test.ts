@@ -1,11 +1,13 @@
+import { EventEmitter } from 'node:events'
 import fs from 'node:fs'
 import http from 'node:http'
 import type { AddressInfo } from 'node:net'
 import os from 'node:os'
 import path from 'node:path'
+import { PassThrough } from 'node:stream'
 
 import express from 'express'
-import { afterAll, afterEach, describe, expect, it } from 'vitest'
+import { afterAll, afterEach, describe, expect, it, vi } from 'vitest'
 
 import { Multihelm } from '../src/multihelm.js'
 import { ROUTE_PREFIX, openStream } from '../src/peer-client.js'
@@ -19,6 +21,7 @@ import {
   withoutOwn,
   events,
   OWN_SOURCE_FRESH_MS,
+  STALL_MS,
   sharedSource,
   sourcePart,
   shareSettings,
@@ -308,41 +311,126 @@ describe('data only one server sees', () => {
     expect(opened).toEqual(['old', 'new'])
   })
 
-  it('drops a peer that leaves too much unread, and keeps serving the others', () => {
+  function fakeClient(sharer: DataSharer, full = false) {
+    const written: string[] = []
+    let room = !full
+    let destroyed = false
+    const res = Object.assign(new EventEmitter(), {
+      status: () => res,
+      set: () => res,
+      flushHeaders: () => undefined,
+      write: (text: string) => {
+        written.push(text)
+        return room
+      },
+      destroy: () => {
+        destroyed = true
+      },
+      end: () => undefined
+    })
+    sharer.serve({ on: () => undefined } as never, res as never)
+    return {
+      data: () => written.filter((w) => w.startsWith('data:')),
+      fill: (full: boolean) => {
+        room = !full
+      },
+      drain: () => res.emit('drain'),
+      destroyed: () => destroyed
+    }
+  }
+
+  it('waits for a slow peer to drain and then sends only the latest, keeping the others served', () => {
     const sharer = new DataSharer({
       settings: { paths: ['a'], connections: [] },
       selfId: 'signalk-multihelm',
       meta: () => undefined
     })
-    const client = (queued: number) => {
-      const written: string[] = []
-      let destroyed = false
-      const res = {
-        writableLength: queued,
-        status: () => res,
-        set: () => res,
-        flushHeaders: () => undefined,
-        write: (text: string) => written.push(text),
-        destroy: () => {
-          destroyed = true
-        },
-        end: () => undefined
-      }
-      const req = { on: () => undefined }
-      sharer.serve(req as never, res as never)
-      return { res, written, destroyed: () => destroyed }
+    const slow = fakeClient(sharer)
+    const fast = fakeClient(sharer)
+    slow.fill(true)
+    for (const v of [1, 2, 3]) {
+      sharer.offer(value('s', 'a', v))
+      sharer.flush()
     }
-    const slow = client(0)
-    const fast = client(0)
-    slow.res.writableLength = 2_000_000
+    expect(slow.data()).toHaveLength(1)
+    expect(fast.data()).toHaveLength(3)
+    slow.fill(false)
+    slow.drain()
+    expect(slow.data()).toHaveLength(2)
+    expect(slow.data()[1]).toContain('"value":3')
+    expect(slow.data()[1]).not.toContain('"value":2')
+    sharer.stop()
+  })
+
+  it('writes the replay a piece at a time as the peer drains', () => {
+    const sharer = new DataSharer({
+      settings: { paths: ['big.*'], connections: [] },
+      selfId: 'signalk-multihelm',
+      meta: () => undefined
+    })
+    for (const n of [1, 2, 3]) {
+      sharer.offer(value('s', `big.${String(n)}`, 'x'.repeat(150_000)))
+    }
+    const late = fakeClient(sharer, true)
+    expect(late.data()).toHaveLength(1)
+    late.drain()
+    expect(late.data()).toHaveLength(2)
+    late.fill(false)
+    late.drain()
+    expect(late.data()).toHaveLength(3)
+    expect(late.data().join('')).toContain('big.3')
+    sharer.stop()
+  })
+
+  it('drops a peer whose buffer stays full, and keeps serving the others', () => {
+    const now = Date.now()
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(now)
+    const sharer = new DataSharer({
+      settings: { paths: ['a'], connections: [] },
+      selfId: 'signalk-multihelm',
+      meta: () => undefined
+    })
+    const stuck = fakeClient(sharer)
+    const fast = fakeClient(sharer)
+    stuck.fill(true)
     sharer.offer(value('s', 'a', 1))
     sharer.flush()
     sharer.offer(value('s', 'a', 2))
+    clock.mockReturnValue(now + STALL_MS - 1)
     sharer.flush()
-    expect(slow.destroyed()).toBe(true)
-    expect(slow.written).toHaveLength(1)
-    expect(fast.written.filter((w) => w.startsWith('data:'))).toHaveLength(2)
+    expect(stuck.destroyed()).toBe(false)
+    clock.mockReturnValue(now + STALL_MS + 1)
+    sharer.flush()
+    expect(stuck.destroyed()).toBe(true)
+    sharer.offer(value('s', 'a', 3))
+    sharer.flush()
+    expect(stuck.data()).toHaveLength(1)
+    expect(fast.data()).toHaveLength(3)
+    clock.mockRestore()
     sharer.stop()
+  })
+
+  it('skips an event too long that came in one piece, and takes the next', async () => {
+    const stream = new PassThrough()
+    const got: SharedUpdate[] = []
+    const r = new SharedDataReceiver({
+      peers: () => [{ id: 'p', name: 'p', url: 'http://127.0.0.1:1', token: '' }],
+      open: () => Promise.resolve({ status: 200, stream: stream as never }),
+      inject: (updates) => {
+        got.push(...updates)
+      },
+      local: () => undefined,
+      debug: () => undefined
+    })
+    receivers.push(r)
+    r.check()
+    await new Promise((resolve) => setTimeout(resolve, 20))
+    const long = JSON.stringify({ updates: [value('s', 'a', 'x'.repeat(1_100_000))] })
+    const short = JSON.stringify({ updates: [value('s', 'b', 1)] })
+    stream.write(`data: ${long}\n\ndata: ${short}\n\n`)
+    await until(() => got.length > 0)
+    expect(got.map((u) => u.values.map((v) => v.path))).toEqual([['b']])
+    expect(stream.destroyed).toBe(false)
   })
 
   it('takes no value it has a fresh source of its own for, and stands in once that source is quiet', () => {

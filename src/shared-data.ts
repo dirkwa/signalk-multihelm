@@ -25,8 +25,8 @@ const RECONNECT_MAX_MS = 60_000
 const MAX_EVENT_LENGTH = 1_000_000
 /** Events are sent in pieces this size, well within what a receiver takes. */
 const SENT_EVENT_LENGTH = 200_000
-/** A peer that lets this much pile up unread is dropped; it opens the stream again. */
-export const MAX_QUEUED_BYTES = 1_000_000
+/** A peer that reads nothing for this long is dropped; it opens the stream again. */
+export const STALL_MS = 60_000
 /** Of a path's metadata, what a server needs to show a value it does not know. */
 const META_FIELDS = ['units', 'description', 'displayName'] as const
 
@@ -111,6 +111,12 @@ interface Client {
   res: Response
   /** Path → the metadata last sent for it on this stream. */
   metaSent: Map<string, string>
+  /** The latest value per path and source not yet written to this stream. */
+  pending: Map<string, SharedValue>
+  /** Events built but not written yet, since the stream's buffer was full. */
+  queued: string[]
+  /** Since when the stream's buffer has been full; nothing more is written until it drains. */
+  fullSince: number | null
 }
 
 export interface SharerHost {
@@ -197,7 +203,6 @@ export function events(
 /** The serving side: collects the values to share and streams them to every peer reading. */
 export class DataSharer {
   private readonly matches: (path: string) => boolean
-  private readonly pending = new Map<string, SharedValue>()
   /** The last value of every path and source, for a peer that begins to read. */
   private readonly latest = new Map<string, SharedValue>()
   private readonly clients = new Set<Client>()
@@ -210,7 +215,7 @@ export class DataSharer {
       this.flush()
     }, SHARE_INTERVAL_MS)
     this.heartbeatTimer = setInterval(() => {
-      this.write(':\n\n')
+      this.heartbeat()
     }, HEARTBEAT_MS)
   }
 
@@ -244,8 +249,8 @@ export class DataSharer {
         const key = `${source}\n${entry.path}`
         const shared = { $source: source, timestamp, path: entry.path, value: entry.value }
         this.latest.set(key, shared)
-        if (this.clients.size > 0) {
-          this.pending.set(key, shared)
+        for (const client of this.clients) {
+          client.pending.set(key, shared)
         }
       }
     }
@@ -275,39 +280,79 @@ export class DataSharer {
     })
     res.flushHeaders()
     res.write(':\n\n')
-    const client: Client = { res, metaSent: new Map() }
+    const client: Client = {
+      res,
+      metaSent: new Map(),
+      pending: new Map(this.latest),
+      queued: [],
+      fullSince: null
+    }
     this.clients.add(client)
     req.on('close', () => {
       this.clients.delete(client)
     })
-    if (this.latest.size > 0) {
-      // The replay is no more than what this server keeps anyway, so it is not held to the queue limit.
-      this.sendUpdates(client, grouped(this.latest.values()), true)
-    }
+    this.send(client)
   }
 
   /** Sends what came in since the last time. */
   flush(): void {
-    if (this.pending.size === 0) {
-      return
-    }
-    const updates = grouped(this.pending.values())
-    this.pending.clear()
     for (const client of this.clients) {
-      this.sendUpdates(client, updates)
+      this.send(client)
     }
   }
 
-  private sendUpdates(client: Client, updates: SharedUpdate[], replay = false): void {
+  /**
+   * Writes a stream's pending values an event at a time until its buffer is
+   * full, then waits for it to drain. Meanwhile newer values replace older
+   * ones of the same path and source, so a slow peer costs no more than the
+   * latest of each and one batch of events.
+   */
+  private send(client: Client): void {
+    if (this.full(client)) {
+      return
+    }
+    if (client.queued.length === 0 && client.pending.size > 0) {
+      client.queued = this.eventsOf(client)
+    }
+    let event
+    while ((event = client.queued.shift()) !== undefined) {
+      if (!client.res.write(event)) {
+        this.waitForDrain(client)
+        return
+      }
+    }
+  }
+
+  private eventsOf(client: Client): string[] {
     const sending = new Map<string, string>()
-    const pieces = updates.map((u) => this.withMeta(u, client.metaSent, sending))
+    const pieces = grouped(client.pending.values()).map((u) =>
+      this.withMeta(u, client.metaSent, sending)
+    )
+    client.pending.clear()
     const out = events(pieces, (path) => sending.delete(path))
     for (const [path, text] of sending) {
       client.metaSent.set(path, text)
     }
-    for (const event of out) {
-      this.send(client, event, replay)
+    return out
+  }
+
+  private full(client: Client): boolean {
+    if (client.fullSince === null) {
+      return false
     }
+    if (Date.now() - client.fullSince > STALL_MS) {
+      this.clients.delete(client)
+      client.res.destroy()
+    }
+    return true
+  }
+
+  private waitForDrain(client: Client): void {
+    client.fullSince = Date.now()
+    client.res.once('drain', () => {
+      client.fullSince = null
+      this.send(client)
+    })
   }
 
   /** A path's metadata goes along with a value whenever it differs from what this stream last got. */
@@ -337,19 +382,12 @@ export class DataSharer {
     return meta.length > 0 ? { ...update, meta } : update
   }
 
-  private write(text: string): void {
+  private heartbeat(): void {
     for (const client of this.clients) {
-      this.send(client, text)
+      if (!this.full(client) && !client.res.write(':\n\n')) {
+        this.waitForDrain(client)
+      }
     }
-  }
-
-  private send(client: Client, text: string, replay = false): void {
-    if (!replay && client.res.writableLength > MAX_QUEUED_BYTES) {
-      this.clients.delete(client)
-      client.res.destroy()
-      return
-    }
-    client.res.write(text)
   }
 
   stop(): void {
@@ -359,7 +397,6 @@ export class DataSharer {
       client.res.end()
     }
     this.clients.clear()
-    this.pending.clear()
     this.latest.clear()
   }
 }
@@ -597,7 +634,10 @@ export class SharedDataReceiver {
         buffer += chunk
         let end
         while ((end = buffer.indexOf('\n\n')) >= 0) {
-          this.event(peer, buffer.slice(0, end))
+          // One chunk can carry a whole event longer than any this side takes.
+          if (end <= MAX_EVENT_LENGTH) {
+            this.event(peer, buffer.slice(0, end))
+          }
           buffer = buffer.slice(end + 2)
         }
         if (buffer.length > MAX_EVENT_LENGTH) {
