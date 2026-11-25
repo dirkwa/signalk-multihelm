@@ -76,6 +76,8 @@ plugin settings, so the boat keeps its master whatever happens to the plan. A
 server on an older Multihelm has no entry in the plan; change its settings
 there.
 
+![A server's settings in the console, opened from its card](docs/screenshots/console-settings.png)
+
 ![The console: three servers side by side, the master with the plugins it runs for the boat, an offline server, and a request waiting for approval](docs/screenshots/console.png)
 
 ## Routes and waypoints
