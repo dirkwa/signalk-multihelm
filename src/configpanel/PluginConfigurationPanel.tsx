@@ -150,6 +150,10 @@ export default function PluginConfigurationPanel({ configuration, save }: Props)
 
   return (
     <div>
+      <div className="alert alert-info">
+        The <a href="/signalk-multihelm/">Multihelm console</a> shows every server of the boat and
+        changes the settings below on any of them.
+      </div>
       {loadError && (
         <div className="alert alert-danger">
           Cannot read Multihelm's status: {loadError}

@@ -5,6 +5,7 @@
 
 import type { PeerInfo, Role } from './api.js'
 import type { DiscoveredServer } from './discovery.js'
+import type { ServerPlan } from './plan.js'
 import type { PairedServer } from './store.js'
 
 /**
@@ -53,4 +54,10 @@ export interface Status {
    * it waits for approval on the master; `request` is its identifier there.
    */
   controlAccess: { masterId: string; request: string } | null
+  /**
+   * The boat plan by server id: each server's settings, the same on every
+   * server. A server is listed once it runs a Multihelm that knows the plan.
+   * Older versions leave it out.
+   */
+  plan?: Record<string, ServerPlan>
 }
