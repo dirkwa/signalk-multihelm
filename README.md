@@ -55,6 +55,19 @@ readonly device token.
 
 Multihelm is enabled when it is installed.
 
+## The console
+
+Multihelm is also a web app: open **Multihelm** from the Signal K web apps on
+any server, at a station's screen too. It shows every server of the boat side
+by side, which one is the master and the plugins that run there for the whole
+boat, which servers are online, and what waits for someone to act, such as an
+access request to approve, with a button that leads there. Every server shows
+the same boat, so the console stays at hand when the master is off. It is
+read-only for now and needs an admin login; settings are made in the plugin
+settings, which the console links to.
+
+![The console: three servers side by side, the master with the plugins it runs for the boat, an offline server, and a request waiting for approval](docs/screenshots/console.png)
+
 ## Routes and waypoints
 
 Routes, waypoints, regions and notes are the same on every server of the

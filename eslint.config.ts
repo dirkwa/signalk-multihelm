@@ -28,6 +28,12 @@ export default defineConfig(
     }
   },
   {
+    files: ['src/console/**/*.{ts,tsx}'],
+    languageOptions: {
+      parserOptions: { project: './src/console/tsconfig.json' }
+    }
+  },
+  {
     files: ['test/**/*.ts'],
     rules: {
       // vi.fn() stubs on object literals have no `this` to lose.

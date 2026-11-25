@@ -94,6 +94,11 @@ sets by hand on one server (see `README.md`).
   the role, the settings. It uses the admin UI's React through
   `host-shim/`, never a copy of its own, and reaches the server modules by
   type imports only. `view.ts` holds what can be tested without a browser.
+- `console/` — the console web app Signal K serves from `public/`
+  (`vite.console.config.ts`, built after the panel, which empties
+  `public/`): every server side by side, read from `status`. It bundles its
+  own React, as it runs on its own page; `board.ts` holds what can be tested
+  without a browser.
 
 ## Contracts other software depends on
 
@@ -153,9 +158,10 @@ sets by hand on one server (see `README.md`).
 
 - `npm run format` — prettier + eslint --fix
 - `npm run ci-lint` — read-only lint + format check (what CI runs)
-- `npm run typecheck` — tsc over `src/` and `test/`, and over the panel
-- `npm run build` — Vite → `plugin/index.js` and the panel → `public/`; type
-  errors fail it
+- `npm run typecheck` — tsc over `src/` and `test/`, and over the panel and
+  the console
+- `npm run build` — Vite → `plugin/index.js`, then the panel and the console
+  → `public/`; type errors fail it
 - `npm test` — vitest
 - `npm run build:all` — all of the above, run before every commit
 
