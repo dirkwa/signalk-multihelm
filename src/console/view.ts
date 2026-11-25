@@ -117,13 +117,27 @@ export function masterPluginProblems(status: Status, installed: InstalledPlugin[
   })
 }
 
-/** What needs someone to act, most pressing first. */
-export function attention(status: Status, installed: InstalledPlugin[], now: number): Attention[] {
+/** The panel's notice, but pairing is done in the settings, not below. */
+export function consoleRoleNotice(status: Status, now: number): Attention {
+  const unpaired =
+    status.running &&
+    !status.masterConflict &&
+    status.role !== 'master' &&
+    status.master === null &&
+    status.majority !== false &&
+    !status.peers.some((p) => p.state === 'paired')
+  return unpaired
+    ? {
+        tone: 'warning',
+        text: "No master found: this server is not paired yet. Pair it with the boat's master in the settings.",
+        link: { href: SETTINGS_URL, text: 'Settings' }
+      }
+    : roleNotice(status, now)
+}
+
+/** What needs someone to act besides the role, most pressing first. */
+export function attention(status: Status, installed: InstalledPlugin[]): Attention[] {
   const items: Attention[] = []
-  const role = roleNotice(status, now)
-  if (role.tone === 'danger' || role.tone === 'warning') {
-    items.push(role)
-  }
   if (status.ownAccess?.state === 'waiting-approval') {
     items.push({
       tone: 'warning',

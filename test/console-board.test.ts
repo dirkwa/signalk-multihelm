@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest'
 import type { PeerInfo } from '../src/api.js'
 import {
   attention,
+  consoleRoleNotice,
   installedPlugins,
   masterPluginProblems,
   serverColumns,
@@ -125,8 +126,7 @@ describe('the console board', () => {
         ownAccess: { state: 'waiting-approval', request: 'r1' },
         controlAccess: { masterId: 'p', request: 'r2' }
       }),
-      [],
-      now
+      []
     )
     expect(items.map((a) => [a.tone, a.text, a.link?.href])).toEqual([
       [
@@ -147,8 +147,22 @@ describe('the console board', () => {
     ])
   })
 
-  it('puts a missing master at the top, and nothing when all is well', () => {
-    expect(attention(status({ peers: [port] }), [], now)[0]?.text).toMatch(/No master found/)
-    expect(attention(status({ peers: [port], master: port }), [], now)).toEqual([])
+  it('lists nothing when all is well', () => {
+    expect(attention(status({ peers: [port], master: port }), [])).toEqual([])
+  })
+
+  it('sends a server not paired yet to the settings, and keeps the other notices', () => {
+    expect(consoleRoleNotice(status(), now)).toEqual({
+      tone: 'warning',
+      text: "No master found: this server is not paired yet. Pair it with the boat's master in the settings.",
+      link: { href: '/admin/#/serverConfiguration/plugins/signalk-multihelm', text: 'Settings' }
+    })
+    expect(
+      consoleRoleNotice(status({ peers: [{ ...port, state: 'waiting-approval' }] }), now).link?.text
+    ).toBe('Settings')
+    expect(consoleRoleNotice(status({ peers: [port] }), now).text).toMatch(
+      /none of the paired servers/
+    )
+    expect(consoleRoleNotice(status({ peers: [port], master: port }), now).tone).toBe('success')
   })
 })
