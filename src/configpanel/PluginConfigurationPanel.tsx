@@ -1,11 +1,17 @@
-import { useCallback, useEffect, useState, type SyntheticEvent } from 'react'
+import { useCallback, useEffect, useRef, useState, type SyntheticEvent } from 'react'
 
 import type { PeerInfo } from '../api.js'
 import type { Settings } from '../config.js'
+import type { AppElsewhere, AppsReport } from '../installed-apps.js'
+import { InstallWatch, type WatchedState } from './install-watch.js'
 import type { PairedByInfo, Status } from '../status.js'
 import {
   accessRequestsUrl,
   ago,
+  appInstallUrl,
+  installErrorText,
+  newestVersion,
+  serversText,
   approveAccessUrl,
   approveErrorText,
   connectionIds,
@@ -177,6 +183,7 @@ export default function PluginConfigurationPanel({ configuration, save }: Props)
           {status.role !== 'master' && status.pairedBy.length > 0 && (
             <PairedByCard status={status} busy={busy} onForget={forget} />
           )}
+          <AppsCard />
           <PluginListCard
             title="Plugins that run on the master only"
             description="These plugins run on the boat's master and are stopped on the other servers, for example an autopilot provider, so only one server sends its commands. The list is the same on every server; when another server becomes the master, they move there."
@@ -643,6 +650,230 @@ function PluginListCard({ title, description, name, current, onSaved }: PluginLi
           {saving ? 'Saving…' : 'Save list'}
         </button>
         {error && <div className="alert alert-danger mt-3 mb-0">{error}</div>}
+      </div>
+    </div>
+  )
+}
+
+function AppsCard() {
+  const [report, setReport] = useState<AppsReport | null>(null)
+  const [error, setError] = useState<string | null>(null)
+  const [busy, setBusy] = useState<string | null>(null)
+  const [installs, setInstalls] = useState<Record<string, WatchedState>>({})
+  const [watching, setWatching] = useState(true)
+  const watcher = useRef<InstallWatch | null>(null)
+
+  // Only the latest answer counts: an earlier one may still list an app set aside since.
+  const loads = useRef(0)
+  const load = useCallback(async () => {
+    const generation = ++loads.current
+    try {
+      const answer = (await call(`${BASE}/apps`)) as AppsReport
+      if (generation === loads.current) {
+        setReport(answer)
+        setError(null)
+      }
+    } catch (e) {
+      if (generation === loads.current) {
+        setError(`Cannot compare the apps: ${errorText(e)}`)
+      }
+    }
+  }, [])
+
+  useEffect(() => {
+    void load()
+  }, [load])
+
+  // Open from the start, so the event the server replays on connecting predates every install made here.
+  useEffect(() => {
+    const scheme = window.location.protocol === 'https:' ? 'wss' : 'ws'
+    const watch = new InstallWatch({
+      connect: (on) => {
+        const socket = new WebSocket(
+          `${scheme}://${window.location.host}/signalk/v1/stream?subscribe=none&serverevents=all`
+        )
+        socket.onmessage = (message: MessageEvent<unknown>) => {
+          on.message(message.data)
+        }
+        socket.onclose = () => {
+          on.close()
+        }
+        return socket
+      },
+      changed: setInstalls,
+      failed: (names) => {
+        setError(`Installing ${names.join(', ')} failed; the server log says why.`)
+      },
+      connected: setWatching
+    })
+    watch.start()
+    watcher.current = watch
+    return () => {
+      watcher.current = null
+      watch.stop()
+    }
+  }, [])
+
+  const act = async (name: string, action: () => Promise<unknown>): Promise<void> => {
+    setBusy(name)
+    setError(null)
+    try {
+      await action()
+    } catch (e) {
+      setError(errorText(e))
+    } finally {
+      setBusy(null)
+    }
+  }
+
+  const install = (app: AppElsewhere): Promise<void> =>
+    act(app.name, async () => {
+      const version = newestVersion(app.servers.map((s) => s.version))
+      const url = appInstallUrl(app.name, version)
+      if (!url) {
+        throw new Error(`${app.name} ${version} is not a package the App Store installs`)
+      }
+      watcher.current?.begin(app.name)
+      await call(url, { method: 'POST' }).catch((e: unknown) => {
+        watcher.current?.cancel(app.name)
+        throw new Error(installErrorText(errorText(e)))
+      })
+    })
+
+  const setHidden = (name: string, hidden: boolean): Promise<void> =>
+    act(name, async () => {
+      await call(`${BASE}/apps/hidden`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name, hidden })
+      })
+      await load()
+    })
+
+  const row = (app: AppElsewhere, detail: string, actions: boolean) => (
+    <li key={app.name} className="list-group-item d-flex flex-wrap align-items-center gap-2">
+      <div className="me-auto">
+        <div>{app.title}</div>
+        <div className="small text-body-secondary">
+          {app.name} · {detail}
+        </div>
+      </div>
+      {actions && installs[app.name] && (
+        <span className="small text-body-secondary">
+          {installs[app.name] === 'done'
+            ? 'Installed; restart the server to start it.'
+            : installs[app.name] === 'unknown'
+              ? 'Whether the install went through is not known here; see the App Store.'
+              : watching
+                ? 'Installing…'
+                : 'Installing; see the App Store for when it is done.'}
+        </span>
+      )}
+      {actions && (!installs[app.name] || installs[app.name] === 'unknown') && (
+        <button
+          type="button"
+          className="btn btn-sm btn-primary"
+          disabled={busy !== null}
+          onClick={() => void install(app)}
+        >
+          {busy === app.name ? 'Installing…' : 'Install'}
+        </button>
+      )}
+      <button
+        type="button"
+        className="btn btn-sm btn-outline-secondary"
+        disabled={busy !== null}
+        onClick={() => void setHidden(app.name, true)}
+      >
+        Not wanted here
+      </button>
+    </li>
+  )
+
+  const empty =
+    report !== null &&
+    report.missing.length === 0 &&
+    report.versions.length === 0 &&
+    report.disabled.length === 0
+
+  return (
+    <div className="card mb-3">
+      <div className="card-header d-flex align-items-center">
+        <span className="me-auto">Apps on the other servers</span>
+        <button
+          type="button"
+          className="btn btn-sm btn-outline-secondary"
+          disabled={busy !== null}
+          onClick={() => void load()}
+        >
+          Check again
+        </button>
+      </div>
+      <div className="card-body">
+        <p className="small text-body-secondary">
+          The plugins and webapps the servers paired with this one have and this one does not, or
+          has in another version. Install installs the other server's version from the App Store;
+          what this server should not have, set aside with Not wanted here.
+        </p>
+        {error && <div className="alert alert-danger">{error}</div>}
+        {report === null && !error && <div className="small">Asking the other servers…</div>}
+        {report?.here && <div className="alert alert-warning">{report.here}</div>}
+        {report?.unreadable.map((s) => (
+          <div key={s.name} className="small text-body-secondary">
+            Cannot read the apps on {s.name}: {s.error}
+          </div>
+        ))}
+        {empty && !report.here && report.unreadable.length === 0 && (
+          <div className="small">This server has every app the others have.</div>
+        )}
+        {report && report.missing.length > 0 && (
+          <>
+            <h6 className="mt-3">Missing here</h6>
+            <ul className="list-group mb-3">
+              {report.missing.map((app) => row(app, `on ${serversText(app.servers)}`, true))}
+            </ul>
+          </>
+        )}
+        {report && report.versions.length > 0 && (
+          <>
+            <h6 className="mt-3">Another version here</h6>
+            <ul className="list-group mb-3">
+              {report.versions.map((app) =>
+                row(
+                  app,
+                  `${app.version} here, ${serversText(app.servers)}`,
+                  newestVersion([app.version, ...app.servers.map((s) => s.version)]) !== app.version
+                )
+              )}
+            </ul>
+          </>
+        )}
+        {report && report.disabled.length > 0 && (
+          <>
+            <h6 className="mt-3">Off here, on elsewhere</h6>
+            <ul className="list-group mb-3">
+              {report.disabled.map((app) =>
+                row(app, `on at ${app.servers.map((s) => s.name).join(', ')}`, false)
+              )}
+            </ul>
+          </>
+        )}
+        {report && report.hidden.length > 0 && (
+          <div className="small mt-2">
+            Not wanted here:{' '}
+            {report.hidden.map((name) => (
+              <button
+                key={name}
+                type="button"
+                className="btn btn-sm btn-link p-0 me-2"
+                disabled={busy !== null}
+                onClick={() => void setHidden(name, false)}
+              >
+                {name} (show again)
+              </button>
+            ))}
+          </div>
+        )}
       </div>
     </div>
   )

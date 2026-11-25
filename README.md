@@ -189,6 +189,20 @@ the admin UI does, and uses the same admin access as the vessel settings
 (see below). Taking a plugin off the list leaves its settings on every
 server as they are.
 
+## Apps the other servers have
+
+A server set up later lacks the apps the others were given over time. In the
+Multihelm settings, **Apps on the other servers** lists the plugins and
+webapps a paired server has and this one does not, those installed here in
+another version, and the plugins switched off here but on elsewhere.
+**Install** installs the other server's version from the App Store; restart
+the server once the App Store is done, as after any install. **Not wanted
+here** sets an app aside on this server only, such as a radar plugin that
+belongs on the radar's server. Only package names, versions and whether a
+plugin is on go between the servers. A server lists its own apps with the
+same admin access as the vessel settings (see below), and a server with an
+older Multihelm is shown as such.
+
 ## Data only one server sees
 
 A server can have a source of its own that the others do not see, such as

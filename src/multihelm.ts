@@ -674,8 +674,13 @@ export class Multihelm {
 
   /** The paired peers that answered lately and share data of their own, with their pairing token. */
   sharingPeers(): SharingPeer[] {
+    return this.answeringPeers(({ shares }) => shares === true)
+  }
+
+  /** The paired servers that answered lately, those `wanted` lets through. */
+  answeringPeers(wanted: (hello: Hello) => boolean = () => true): SharingPeer[] {
     return this.seenPeers(Date.now())
-      .filter(({ hello }) => hello.shares === true)
+      .filter(({ hello }) => wanted(hello))
       .map(({ peer, hello }) => ({
         id: peer.id,
         name: hello.name,

@@ -1,10 +1,10 @@
 import { useEffect, useState } from 'react'
 
-import { roleNotice } from '../configpanel/view.js'
 import type { ServerPlan } from '../plan.js'
 import type { Status } from '../status.js'
 import {
   attention,
+  consoleRoleNotice,
   installedPlugins,
   pluginName,
   serverColumns,
@@ -42,16 +42,27 @@ function usePolled<T>(url: string, everyMs: number, parse: (raw: unknown) => T) 
   const [load, setLoad] = useState<Load>({ state: 'loading' })
   useEffect(() => {
     let stopped = false
+    // A slow answer must not overwrite a later one that came first.
+    let issued = 0
+    let applied = 0
+    const current = (request: number): boolean => {
+      if (stopped || request <= applied) {
+        return false
+      }
+      applied = request
+      return true
+    }
     const read = (): void => {
+      const request = ++issued
       getJson(url).then(
         (raw) => {
-          if (!stopped) {
+          if (current(request)) {
             setValue(parse(raw))
             setLoad({ state: 'ok' })
           }
         },
         (e: unknown) => {
-          if (!stopped) {
+          if (current(request)) {
             setLoad(
               e instanceof LoginNeeded
                 ? { state: 'login' }
@@ -123,8 +134,17 @@ export function Board() {
   }
 
   const installed = plugins.value ?? []
-  const role = roleNotice(s, now)
-  const items = attention(s, installed, now)
+  const role = consoleRoleNotice(s, now)
+  const items = attention(s, installed)
+  if (plugins.load.state === 'error' || plugins.load.state === 'login') {
+    items.push({
+      tone: 'warning',
+      text:
+        plugins.value === null
+          ? "Cannot read this server's plugins, so the plugins that run on the master only are not checked."
+          : "Cannot read this server's plugins just now; what is said about them may be out of date."
+    })
+  }
   const columns = serverColumns(s)
   const masterKnown = columns.some((c) => c.master)
 
@@ -136,8 +156,7 @@ export function Board() {
           Lost the connection to this server; what follows may be out of date.
         </p>
       )}
-      <p className={`banner tone-${role.tone}`}>{role.text}</p>
-      {items.length > 0 && <AttentionList items={items} />}
+      <AttentionList items={[role, ...items]} />
       <section className="servers" aria-label="Servers">
         {columns.map((column) => (
           <ServerCard
