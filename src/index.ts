@@ -385,7 +385,7 @@ export default function (app: ServerAPI): Plugin {
       const own = planSettings(settings)
       // Restarting from inside a dataset round would stop the round that is applying the change.
       const applyOwn = (planned: PlanSettings): void => {
-        if (isDeepStrictEqual(planned, own)) {
+        if (run !== runs || isDeepStrictEqual(planned, own)) {
           return
         }
         const configuration = { ...planned, master: isMaster }
