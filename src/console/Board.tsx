@@ -13,7 +13,7 @@ import {
   type Attention,
   type InstalledPlugin,
   type ServerColumn
-} from './board.js'
+} from './view.js'
 import { ServerSettings } from './ServerSettings.js'
 
 const STATUS_URL = '/plugins/signalk-multihelm/status'

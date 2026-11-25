@@ -1,7 +1,7 @@
 import { useState } from 'react'
 
 import { MAX_LOCATION_LENGTH, type PlanSettings, type ServerPlan } from '../plan.js'
-import { linesFromText, planUrl, settingTitle, SWITCHES } from './board.js'
+import { linesFromText, planUrl, settingTitle, SWITCHES } from './view.js'
 
 const MAX_TAKE_OVER = 9
 

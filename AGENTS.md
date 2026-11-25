@@ -103,7 +103,7 @@ sets by hand on one server (see `README.md`).
 - `console/` — the console web app Signal K serves from `public/`
   (`vite.console.config.ts`, built after the panel, which empties
   `public/`): every server side by side, read from `status`. It bundles its
-  own React, as it runs on its own page; `board.ts` holds what can be tested
+  own React, as it runs on its own page; `view.ts` holds what can be tested
   without a browser. **Settings** on a server's card writes that server's
   plan entry through `PUT plan/<id>`.
 
