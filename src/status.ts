@@ -27,6 +27,9 @@ export interface Status {
   serverId: string | null
   /** This server's host name, as the peers show it. */
   name: string
+  /** The versions this server runs; older versions leave them out. */
+  signalk?: string
+  multihelm?: string
   role: Role | null
   master: PeerInfo | null
   masterConflict: boolean

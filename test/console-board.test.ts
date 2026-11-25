@@ -7,6 +7,7 @@ import {
   installedPlugins,
   masterPluginProblems,
   serverColumns,
+  settingsNote,
   stateText
 } from '../src/console/view.js'
 import type { Status } from '../src/status.js'
@@ -30,6 +31,10 @@ function status(over: Partial<Status> = {}): Status {
     controlAccess: null,
     ...over
   }
+}
+
+function fail(): never {
+  throw new Error('no such column')
 }
 
 const now = 1_000_000_000
@@ -72,6 +77,44 @@ describe('the console board', () => {
       ['backup', false, false, 'online', true]
     ])
     expect(columns[1]?.versions).toBe('Signal K 2.33.0 · Multihelm 0.9.1')
+  })
+
+  it("shows this server's own versions", () => {
+    const [here] = serverColumns(status({ signalk: '2.37.0', multihelm: '0.10.1' }))
+    expect(here?.versions).toBe('Signal K 2.37.0 · Multihelm 0.10.1')
+  })
+
+  it('offers to pair with a server that only pairs with this one, when it is announced', () => {
+    const pairedBy = [{ id: 'r', name: 'pi5radar', lastSeen: now, online: true }]
+    const [, announced] = serverColumns(
+      status({
+        pairedBy,
+        discovered: [
+          { name: 'pi5radar', url: 'http://192.0.2.20:3000', lastSeen: now },
+          { name: 'pi5radar', url: 'https://192.0.2.20:3443', lastSeen: now },
+          { name: 'other', url: 'http://192.0.2.30:3000', lastSeen: now }
+        ]
+      })
+    )
+    expect(announced?.pairUrl).toBe('https://192.0.2.20:3443')
+    expect(settingsNote(announced ?? fail())).toContain('pair this server with pi5radar too')
+
+    const [, unknown] = serverColumns(status({ pairedBy }))
+    expect(unknown?.pairUrl).toBeUndefined()
+    expect(settingsNote(unknown ?? fail())).toContain('enter its address')
+  })
+
+  it('asks to update a peer whose Multihelm does not know the plan, and waits for one that does', () => {
+    const [, older] = serverColumns(status({ peers: [port] }))
+    expect(settingsNote(older ?? fail())).toBe(
+      'To change its settings here, update Multihelm on flybridge-port to 0.10.0 or later.'
+    )
+    const [, newer] = serverColumns(status({ peers: [{ ...port, multihelm: '0.10.0' }] }))
+    expect(settingsNote(newer ?? fail())).toBe(
+      'Its settings show here once it has answered this server.'
+    )
+    const [, later] = serverColumns(status({ peers: [{ ...port, multihelm: '1.2.0-beta.1' }] }))
+    expect(settingsNote(later ?? fail())).not.toContain('update')
   })
 
   it('marks this server as the master while it is', () => {

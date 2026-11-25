@@ -19,9 +19,13 @@ export interface ServerColumn {
   master: boolean
   state: ServerState
   versions: string
+  /** The Multihelm version it runs, when it says. */
+  multihelm?: string
   lastSeen?: number
   /** Paired with this server, but this server is not paired with it. */
   oneWay: boolean
+  /** Where this server can pair with a one-way server, when it is announced on the network. */
+  pairUrl?: string
 }
 
 export interface InstalledPlugin {
@@ -45,7 +49,7 @@ export function serverColumns(status: Status): ServerColumn[] {
     here: true,
     master: status.role === 'master',
     state: 'online',
-    versions: '',
+    versions: versionText(status),
     oneWay: false
   }
   const peers = status.peers.map((peer): ServerColumn => ({
@@ -55,6 +59,7 @@ export function serverColumns(status: Status): ServerColumn[] {
     master: status.master !== null && status.master.id === peer.id,
     state: peer.state === 'paired' ? (peer.online === true ? 'online' : 'offline') : peer.state,
     versions: versionText(peer),
+    ...(peer.multihelm === undefined ? {} : { multihelm: peer.multihelm }),
     ...(peer.lastSeen === undefined ? {} : { lastSeen: peer.lastSeen }),
     oneWay: false
   }))
@@ -69,10 +74,44 @@ export function serverColumns(status: Status): ServerColumn[] {
       state: server.online ? 'online' : 'offline',
       versions: versionText(server),
       lastSeen: server.lastSeen,
-      oneWay: true
+      oneWay: true,
+      ...pairingAddress(server.name, status.discovered)
     }))
   return [here, ...peers, ...pairedBy]
 }
+
+function pairingAddress(name: string, discovered: Status['discovered']): { pairUrl?: string } {
+  const found = discovered.filter((server) => server.name === name)
+  const url = (found.find((server) => server.url.startsWith('https:')) ?? found[0])?.url
+  return url === undefined ? {} : { pairUrl: url }
+}
+
+const PLAN_VERSION = [0, 10, 0]
+
+function knowsPlan(version: string): boolean {
+  const parts = version.split(/[.+-]/, 3).map(Number)
+  for (const [i, wanted] of PLAN_VERSION.entries()) {
+    const part = parts[i] ?? 0
+    if (Number.isNaN(part) || part !== wanted) {
+      return !Number.isNaN(part) && part > wanted
+    }
+  }
+  return true
+}
+
+/** What a card says when the console cannot change that server's settings. */
+export function settingsNote(column: ServerColumn): string {
+  if (column.oneWay) {
+    return column.pairUrl === undefined
+      ? `To see and change its settings here, pair this server with ${column.name} too: in Settings, under "Pair with another server", enter its address.`
+      : `To see and change its settings here, pair this server with ${column.name} too. ${column.name} then asks for your approval.`
+  }
+  return column.multihelm !== undefined && knowsPlan(column.multihelm)
+    ? 'Its settings show here once it has answered this server.'
+    : `To change its settings here, update Multihelm on ${column.name} to ${PLAN_VERSION.join('.')} or later.`
+}
+
+export const PEERS_URL = '/plugins/signalk-multihelm/peers'
 
 /** From `/skServer/plugins`; entries without an id are left out. */
 export function installedPlugins(raw: unknown): InstalledPlugin[] {
