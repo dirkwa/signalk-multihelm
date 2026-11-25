@@ -1,0 +1,22 @@
+{
+  // The console is a browser bundle with its own React; DOM and JSX stay out
+  // of the plugin's tsconfig.
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "esnext",
+    "moduleResolution": "bundler",
+    "jsx": "react-jsx",
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    // Node: the status types come from server modules that use Buffer.
+    // vite/client: the stylesheet import.
+    "types": ["node", "vite/client"],
+    "strict": true,
+    "noEmit": true,
+    "isolatedModules": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "forceConsistentCasingInFileNames": true,
+    "noUncheckedIndexedAccess": true
+  },
+  "include": ["."]
+}
