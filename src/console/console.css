@@ -265,22 +265,25 @@ button.button:disabled {
   color: var(--card);
 }
 
-.sheet-backdrop {
-  position: fixed;
-  inset: 0;
-  display: flex;
-  align-items: flex-end;
-  justify-content: center;
+.sheet {
+  width: min(900px, 100%);
+  max-width: 100%;
+  max-height: 90vh;
+  overflow-y: auto;
+  margin: auto auto 0;
+  padding: 0;
+  border: none;
+  border-radius: 16px 16px 0 0;
+  background: var(--card);
+  color: inherit;
+}
+
+.sheet::backdrop {
   background: rgb(0 0 0 / 45%);
 }
 
-.sheet {
-  width: min(900px, 100%);
-  max-height: 90vh;
-  overflow-y: auto;
+.sheet-body {
   padding: 20px 24px 24px;
-  border-radius: 16px 16px 0 0;
-  background: var(--card);
 }
 
 .sheet-head {

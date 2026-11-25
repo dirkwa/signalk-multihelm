@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 
 import { MAX_LOCATION_LENGTH, type PlanSettings, type ServerPlan } from '../plan.js'
 import { linesFromText, planUrl, settingTitle, SWITCHES } from './view.js'
@@ -33,6 +33,24 @@ export function ServerSettings({ serverId, name, here, plan, close }: Props) {
   const [connections, setConnections] = useState(plan.settings.shareConnections.join('\n'))
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const dialog = useRef<HTMLDialogElement>(null)
+
+  useEffect(() => {
+    const element = dialog.current
+    if (element && !element.open) {
+      element.showModal()
+    }
+    return () => {
+      element?.close()
+    }
+  }, [])
+
+  // While a save runs the sheet stays open, so its answer reaches the sheet that sent it.
+  const dismiss = (): void => {
+    if (!saving) {
+      close()
+    }
+  }
 
   const set = <K extends keyof PlanSettings>(key: K, value: PlanSettings[K]): void => {
     setSettings({ ...settings, [key]: value })
@@ -59,19 +77,24 @@ export function ServerSettings({ serverId, name, here, plan, close }: Props) {
   }
 
   return (
-    <div className="sheet-backdrop" role="presentation" onClick={close}>
-      <section
-        className="sheet"
-        role="dialog"
-        aria-modal="true"
-        aria-label={`Settings of ${name}`}
-        onClick={(e) => {
-          e.stopPropagation()
-        }}
-      >
+    <dialog
+      ref={dialog}
+      className="sheet"
+      aria-label={`Settings of ${name}`}
+      onCancel={(e) => {
+        e.preventDefault()
+        dismiss()
+      }}
+      onClick={(e) => {
+        if (e.target === dialog.current) {
+          dismiss()
+        }
+      }}
+    >
+      <div className="sheet-body">
         <header className="sheet-head">
           <h2>{name}</h2>
-          <button type="button" className="button" onClick={close}>
+          <button type="button" className="button" disabled={saving} onClick={dismiss}>
             Close
           </button>
         </header>
@@ -172,7 +195,7 @@ export function ServerSettings({ serverId, name, here, plan, close }: Props) {
             {saving ? 'Saving…' : 'Save'}
           </button>
         </div>
-      </section>
-    </div>
+      </div>
+    </dialog>
   )
 }

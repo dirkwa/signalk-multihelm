@@ -188,12 +188,14 @@ export function Board() {
       </section>
       {editing && s.plan?.[editing.id] && (
         <ServerSettings
+          key={editing.id}
           serverId={editing.id}
           name={editing.name}
           here={editing.here}
           plan={s.plan[editing.id] as ServerPlan}
           close={() => {
-            setEditing(null)
+            const session = editing
+            setEditing((current) => (current === session ? null : current))
           }}
         />
       )}
