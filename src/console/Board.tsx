@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 
+import type { ServerPlan } from '../plan.js'
 import type { Status } from '../status.js'
 import {
   attention,
@@ -13,6 +14,7 @@ import {
   type InstalledPlugin,
   type ServerColumn
 } from './view.js'
+import { ServerSettings } from './ServerSettings.js'
 
 const STATUS_URL = '/plugins/signalk-multihelm/status'
 const PLUGINS_URL = '/skServer/plugins'
@@ -99,6 +101,7 @@ export function Board() {
   const status = usePolled(STATUS_URL, STATUS_POLL_MS, asStatus)
   const plugins = usePolled(PLUGINS_URL, PLUGINS_POLL_MS, installedPlugins)
   const now = useNow()
+  const [editing, setEditing] = useState<ServerColumn | null>(null)
 
   if (!status.value) {
     return (
@@ -162,6 +165,10 @@ export function Board() {
             now={now}
             masterPlugins={column.master ? s.masterPlugins : []}
             installed={installed}
+            plan={s.plan?.[column.id]}
+            edit={() => {
+              setEditing(column)
+            }}
           />
         ))}
       </section>
@@ -179,6 +186,19 @@ export function Board() {
         />
         <BoatCard title="Kept in step" empty="Nothing registered." items={s.datasets} />
       </section>
+      {editing && s.plan?.[editing.id] && (
+        <ServerSettings
+          key={editing.id}
+          serverId={editing.id}
+          name={editing.name}
+          here={editing.here}
+          plan={s.plan[editing.id] as ServerPlan}
+          close={() => {
+            const session = editing
+            setEditing((current) => (current === session ? null : current))
+          }}
+        />
+      )}
       <p className="footer">
         <a className="button" href={SETTINGS_URL}>
           Settings
@@ -218,9 +238,11 @@ interface ServerCardProps {
   now: number
   masterPlugins: string[]
   installed: InstalledPlugin[]
+  plan: ServerPlan | undefined
+  edit: () => void
 }
 
-function ServerCard({ column, now, masterPlugins, installed }: ServerCardProps) {
+function ServerCard({ column, now, masterPlugins, installed, plan, edit }: ServerCardProps) {
   return (
     <article className={`server state-${column.state}${column.here ? ' here' : ''}`}>
       <div className="server-head">
@@ -228,6 +250,7 @@ function ServerCard({ column, now, masterPlugins, installed }: ServerCardProps) 
         <h2>{column.name}</h2>
         {column.master && <span className="badge">Master</span>}
       </div>
+      {plan && plan.location !== '' && <p className="server-location">{plan.location}</p>}
       <p className="server-state">{stateText(column, now)}</p>
       {column.versions !== '' && <p className="server-versions">{column.versions}</p>}
       {column.oneWay && (
@@ -243,6 +266,17 @@ function ServerCard({ column, now, masterPlugins, installed }: ServerCardProps) 
           </ul>
         </div>
       )}
+      <div className="server-actions">
+        {plan ? (
+          <button type="button" className="button" onClick={edit}>
+            Settings
+          </button>
+        ) : (
+          !column.here && (
+            <p className="muted">Its settings are made on that server: its Multihelm is older.</p>
+          )
+        )}
+      </div>
     </article>
   )
 }

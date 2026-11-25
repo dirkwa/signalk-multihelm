@@ -5,6 +5,8 @@ import {
   versionText,
   type Notice
 } from '../configpanel/view.js'
+import { ConfigSchema } from '../config.js'
+import type { PlanSettings } from '../plan.js'
 import type { Status } from '../status.js'
 
 export type ServerState = 'online' | 'offline' | 'waiting-approval' | 'needs-pairing'
@@ -189,4 +191,37 @@ export function stateText(column: ServerColumn, now: number): string {
     case 'needs-pairing':
       return 'Needs pairing again'
   }
+}
+
+export const SWITCHES = [
+  'syncResources',
+  'followVessel',
+  'followMetadata',
+  'followSourcePriorities',
+  'historyFromMaster',
+  'autopilotFromMaster',
+  'courseFromMaster',
+  'alarmsFromMaster',
+  'takeSharedData'
+] as const satisfies readonly (keyof PlanSettings)[]
+
+export function settingTitle(key: keyof PlanSettings): string {
+  const { title } = ConfigSchema.properties[key] as { title?: unknown }
+  return typeof title === 'string' ? title : key
+}
+
+/** Lines typed one per line, or separated by commas. */
+export function linesFromText(text: string): string[] {
+  return [
+    ...new Set(
+      text
+        .split(/[\n,]/)
+        .map((line) => line.trim())
+        .filter(Boolean)
+    )
+  ]
+}
+
+export function planUrl(serverId: string): string {
+  return `/plugins/signalk-multihelm/plan/${encodeURIComponent(serverId)}`
 }

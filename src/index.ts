@@ -2,6 +2,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { isDeepStrictEqual } from 'node:util'
 
 import type {
   Context,
@@ -37,6 +38,7 @@ import type { OwnAccessState } from './status.js'
 import { hasResourcesApi, resourceOfPath, resourcesDataset } from './resources-dataset.js'
 import { AppsOverview, LocalApps } from './installed-apps.js'
 import { OwnServerAccess } from './own-access.js'
+import { BoatPlan, onStart, planSettings, type PlanControl, type PlanSettings } from './plan.js'
 import {
   DataSharer,
   SHARED_DATA_ROUTE,
@@ -159,6 +161,9 @@ export default function (app: ServerAPI): Plugin {
   let sharedPlugins: { list: PluginList; config: SharedPluginConfig } | null = null
   let masterControl: MasterControlAccess | null = null
   let dataSharer: DataSharer | null = null
+  let planControl: PlanControl | null = null
+  let selfRestart: ReturnType<typeof setTimeout> | null = null
+  let runs = 0
   let apps: { local: LocalApps; overview: AppsOverview } | null = null
 
   function localVesselSettings(): VesselSettings | null {
@@ -331,7 +336,7 @@ export default function (app: ServerAPI): Plugin {
     app.emitPropertyValue(PROPERTY_NAME, value)
   }
 
-  return {
+  const plugin: Plugin = {
     id: PLUGIN_ID,
     name: 'Multihelm',
     description:
@@ -376,6 +381,78 @@ export default function (app: ServerAPI): Plugin {
       discovery = new ServerDiscovery(() => host.config?.getExternalPort?.())
       discovery.start()
       mh.start()
+      const run = ++runs
+      const own = planSettings(settings)
+      // Restarting from inside a dataset round would stop the round that is applying the change.
+      const applyOwn = (planned: PlanSettings): void => {
+        if (run !== runs || isDeepStrictEqual(planned, own)) {
+          return
+        }
+        const configuration = { ...planned, master: isMaster }
+        app.savePluginOptions(configuration, (error) => {
+          if (error) {
+            app.error(
+              `Multihelm: cannot save the settings planned for this server: ${error.message}`
+            )
+            return
+          }
+          try {
+            plan.markApplied(planned)
+          } catch (e) {
+            app.error(
+              `Multihelm: cannot record the settings applied on this server: ${e instanceof Error ? e.message : String(e)}`
+            )
+          }
+          // A run that was stopped meanwhile must not restart the one that replaced it.
+          if (run !== runs) {
+            return
+          }
+          if (selfRestart !== null) {
+            clearTimeout(selfRestart)
+          }
+          selfRestart = setTimeout(() => {
+            selfRestart = null
+            if (run !== runs) {
+              return
+            }
+            void Promise.resolve(plugin.stop()).then(() => {
+              plugin.start(configuration, () => undefined)
+            })
+          }, 0)
+        })
+      }
+      const plan = new BoatPlan({
+        serverId: mh.serverId,
+        dir: path.join(app.getDataDirPath(), 'plan'),
+        ownChanged: applyOwn,
+        changed: () => {
+          planHandle.changed()
+        }
+      })
+      const planHandle = mh.registerDataset(plan.dataset)
+      planControl = { plan, applyOwn }
+      const ownPlan = plan.get(mh.serverId)
+      switch (onStart(own, plan.applied(), ownPlan?.settings ?? null)) {
+        case 'publish':
+          plan
+            .set(mh.serverId, { location: ownPlan?.location ?? '', settings: own })
+            .then(() => {
+              plan.markApplied(own)
+            })
+            .catch((error: unknown) => {
+              app.error(
+                `Multihelm: cannot put this server's settings in the plan: ${error instanceof Error ? error.message : String(error)}`
+              )
+            })
+          break
+        case 'apply':
+          if (ownPlan) {
+            applyOwn(ownPlan.settings)
+          }
+          break
+        case 'none':
+          break
+      }
       const stopResources =
         settings.syncResources !== false && hasResourcesApi(app) ? syncResources(mh) : null
       const stopSharing = sharer.shares()
@@ -623,6 +700,7 @@ export default function (app: ServerAPI): Plugin {
         stopRolePlugins()
         masterPlugins.stop()
         settingsHandle.unregister()
+        planHandle.unregister()
         stopRoleAutopilot()
         autopilot?.stop()
         course?.stop()
@@ -641,6 +719,11 @@ export default function (app: ServerAPI): Plugin {
     },
 
     stop() {
+      runs++
+      if (selfRestart !== null) {
+        clearTimeout(selfRestart)
+        selfRestart = null
+      }
       stopFollowing?.()
       stopFollowing = null
       ownAccess = null
@@ -649,6 +732,7 @@ export default function (app: ServerAPI): Plugin {
       sharedPlugins = null
       masterControl = null
       dataSharer = null
+      planControl = null
       stopRoleStatus?.()
       stopRoleStatus = null
       if (multihelm) {
@@ -674,8 +758,10 @@ export default function (app: ServerAPI): Plugin {
         () => masterControl?.waitingForApproval(multihelm?.role() === 'master') ?? null,
         () => sharedPlugins,
         () => dataSharer,
-        () => apps
+        () => apps,
+        () => planControl
       )
     }
   }
+  return plugin
 }

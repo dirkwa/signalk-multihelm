@@ -22,6 +22,7 @@ import { parsePluginIds, type PluginList } from './master-plugins.js'
 import { MASTER_ROUTE, type MasterProxy } from './master-proxy.js'
 import type { Multihelm } from './multihelm.js'
 import type { HelloFrom } from './peer-client.js'
+import { isServerPlan, type PlanControl } from './plan.js'
 import type { SharedPluginConfig } from './shared-config.js'
 import { SHARED_DATA_ROUTE, type DataSharer } from './shared-data.js'
 import type { OwnAccessState, Status } from './status.js'
@@ -83,7 +84,8 @@ export function registerRoutes(
   controlAccess: () => Status['controlAccess'] = () => null,
   sharedPlugins: () => { list: PluginList; config: SharedPluginConfig } | null = () => null,
   dataSharer: () => DataSharer | null = () => null,
-  apps: () => { local: LocalApps; overview: AppsOverview } | null = () => null
+  apps: () => { local: LocalApps; overview: AppsOverview } | null = () => null,
+  boatPlan: () => PlanControl | null = () => null
 ): void {
   const scoped = (router as RouterWithAccess).access
   const available = typeof scoped === 'function'
@@ -223,7 +225,8 @@ export function registerRoutes(
       ownAccess: mh ? ownAccess() : null,
       masterPlugins: masterPlugins()?.ids() ?? [],
       sharedPlugins: sharedPlugins()?.list.ids() ?? [],
-      controlAccess: mh ? controlAccess() : null
+      controlAccess: mh ? controlAccess() : null,
+      plan: mh ? (boatPlan()?.plan.servers() ?? {}) : {}
     }
     res.json(status)
   })
@@ -294,6 +297,35 @@ export function registerRoutes(
     const shared = sharedPlugins()
     return shared ? { list: shared.list, added: (ids) => shared.config.seed(ids) } : null
   })
+
+  router.put(
+    '/plan/:serverId',
+    running(async (mh, req, res) => {
+      const control = boatPlan()
+      const serverId = String(req.params.serverId)
+      if (!control) {
+        res.status(503).json({ error: 'Multihelm is not running' })
+        return
+      }
+      if (!control.plan.get(serverId)) {
+        res.status(404).json({
+          error:
+            'that server has no entry in the plan; it runs an older Multihelm or was never seen'
+        })
+        return
+      }
+      if (!isServerPlan(req.body)) {
+        res.status(400).json({ error: "not a server's plan" })
+        return
+      }
+      const plan = req.body
+      await control.plan.set(serverId, plan)
+      if (serverId === mh.serverId) {
+        control.applyOwn(plan.settings)
+      }
+      res.json(plan)
+    })
+  )
 
   router.get(
     '/apps',

@@ -62,9 +62,21 @@ any server, at a station's screen too. It shows every server of the boat side
 by side, which one is the master and the plugins that run there for the whole
 boat, which servers are online, and what waits for someone to act, such as an
 access request to approve, with a button that leads there. Every server shows
-the same boat, so the console stays at hand when the master is off. It is
-read-only for now and needs an admin login; settings are made in the plugin
-settings, which the console links to.
+the same boat, so the console stays at hand when the master is off. It needs
+an admin login.
+
+**Settings** on a server's card changes that server's Multihelm settings from
+here: where it is on board, its place to take over as master, what it takes
+over from the master and what it shares. They are kept in step as the boat
+plan, with no master, so the change reaches that server within a round and
+Multihelm restarts there with it, while the server is off too, as soon as it
+is back. A change made in a server's own plugin settings goes to the plan the
+same way. Only **This server is the boat's master** stays in each server's own
+plugin settings, so the boat keeps its master whatever happens to the plan. A
+server on an older Multihelm has no entry in the plan; change its settings
+there.
+
+![A server's settings in the console, opened from its card](docs/screenshots/console-settings.png)
 
 ![The console: three servers side by side, the master with the plugins it runs for the boat, an offline server, and a request waiting for approval](docs/screenshots/console.png)
 

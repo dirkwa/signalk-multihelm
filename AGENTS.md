@@ -102,13 +102,25 @@ sets by hand on one server (see `README.md`).
   `host-shim/`, never a copy of its own, and reaches the server modules by
   type imports only. `view.ts` holds what can be tested without a browser;
   `install-watch.ts` follows App Store installs through the server events.
+- `plan.ts` — `BoatPlan`: the `signalk-multihelm/plan` dataset, one
+  meta-only entry per server (`server-<id>`: location and every setting but
+  `master`). Each server applies only its own entry, through
+  `savePluginOptions` and a restart of itself; `onStart` decides whether the
+  plugin settings or the plan wins, from `applied.json`, the settings it
+  last applied or published.
 - `console/` — the console web app Signal K serves from `public/`
   (`vite.console.config.ts`, built after the panel, which empties
   `public/`): every server side by side, read from `status`. It bundles its
   own React, as it runs on its own page; `view.ts` holds what can be tested
-  without a browser.
+  without a browser. **Settings** on a server's card writes that server's
+  plan entry through `PUT plan/<id>`.
 
 ## Contracts other software depends on
+
+- **Plan entries** go between servers that may run different Multihelm
+  versions: `PlanSettingsSchema` requires today's settings, so a setting
+  added later must be optional there, or a server on the new version
+  rejects the entries of older ones.
 
 - **The `multihelm` PropertyValue and `api.ts` types.** Consumers act on the
   last value; `{ apiVersion: 1 }` without methods means stopped.
