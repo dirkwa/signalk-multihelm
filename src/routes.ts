@@ -1,7 +1,7 @@
 /**
  * Routes under `/plugins/signalk-multihelm/`.
  *
- * Peers read `hello`, `manifest`, `file`, `vessel-settings` and `shared-data` with the readonly device token
+ * Peers read `hello`, `manifest`, `file`, `vessel-settings`, `shared-data` and `installed` with the readonly device token
  * they got when pairing, so those are registered with readonly access
  * (`router.access`, signalk-server 2.31 and later). Without it plugin routes
  * are admin-only, a readonly token cannot reach them, and `status` says
@@ -12,6 +12,12 @@
 import type { IRouter, Request, Response } from 'express'
 
 import type { DiscoveredServer } from './discovery.js'
+import {
+  INSTALLED_ROUTE,
+  isPackageName,
+  type AppsOverview,
+  type LocalApps
+} from './installed-apps.js'
 import { parsePluginIds, type PluginList } from './master-plugins.js'
 import { MASTER_ROUTE, type MasterProxy } from './master-proxy.js'
 import type { Multihelm } from './multihelm.js'
@@ -76,7 +82,8 @@ export function registerRoutes(
   masterPlugins: () => PluginList | null = () => null,
   controlAccess: () => Status['controlAccess'] = () => null,
   sharedPlugins: () => { list: PluginList; config: SharedPluginConfig } | null = () => null,
-  dataSharer: () => DataSharer | null = () => null
+  dataSharer: () => DataSharer | null = () => null,
+  apps: () => { local: LocalApps; overview: AppsOverview } | null = () => null
 ): void {
   const scoped = (router as RouterWithAccess).access
   const available = typeof scoped === 'function'
@@ -169,6 +176,18 @@ export function registerRoutes(
     }
     sharer.serve(req, res)
   })
+
+  readonly.get(
+    INSTALLED_ROUTE,
+    running(async (_mh, _req, res) => {
+      const list = await apps()?.local.list()
+      if (!list) {
+        res.status(503).json({ error: 'this server cannot read its own apps yet' })
+        return
+      }
+      res.json({ apps: list })
+    })
+  )
 
   const forwardToMaster: Handler = (req, res) => {
     const proxy = masterProxy()
@@ -275,6 +294,40 @@ export function registerRoutes(
     const shared = sharedPlugins()
     return shared ? { list: shared.list, added: (ids) => shared.config.seed(ids) } : null
   })
+
+  router.get(
+    '/apps',
+    running(async (_mh, _req, res) => {
+      const overview = apps()?.overview
+      if (!overview) {
+        res.status(503).json({ error: 'Multihelm is not running' })
+        return
+      }
+      res.json(await overview.report())
+    })
+  )
+
+  router.put(
+    '/apps/hidden',
+    running((_mh, req, res) => {
+      const overview = apps()?.overview
+      const body = req.body as { name?: unknown; hidden?: unknown } | undefined
+      if (!overview) {
+        res.status(503).json({ error: 'Multihelm is not running' })
+        return
+      }
+      if (
+        typeof body?.name !== 'string' ||
+        !isPackageName(body.name) ||
+        typeof body.hidden !== 'boolean'
+      ) {
+        res.status(400).json({ error: 'name must be a package name and hidden a boolean' })
+        return
+      }
+      overview.setHidden(body.name, body.hidden)
+      res.json({ hidden: body.hidden })
+    })
+  )
 
   router.post(
     '/run',

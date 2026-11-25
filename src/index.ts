@@ -35,6 +35,7 @@ import { ROUTE_PREFIX, openStream } from './peer-client.js'
 import { registerRoutes } from './routes.js'
 import type { OwnAccessState } from './status.js'
 import { hasResourcesApi, resourceOfPath, resourcesDataset } from './resources-dataset.js'
+import { AppsOverview, LocalApps } from './installed-apps.js'
 import { OwnServerAccess } from './own-access.js'
 import {
   DataSharer,
@@ -158,6 +159,7 @@ export default function (app: ServerAPI): Plugin {
   let sharedPlugins: { list: PluginList; config: SharedPluginConfig } | null = null
   let masterControl: MasterControlAccess | null = null
   let dataSharer: DataSharer | null = null
+  let apps: { local: LocalApps; overview: AppsOverview } | null = null
 
   function localVesselSettings(): VesselSettings | null {
     const deltas = host.config?.baseDeltaEditor?.deltas
@@ -403,6 +405,18 @@ export default function (app: ServerAPI): Plugin {
         }
       })
       ownAccess = access
+      const localApps = new LocalApps({ token: () => access.token(), ownUrl })
+      apps = {
+        local: localApps,
+        overview: new AppsOverview({
+          local: localApps,
+          peers: () => mh.answeringPeers(),
+          hidden: () => store.loadHiddenApps(),
+          saveHidden: (names) => {
+            store.saveHiddenApps(names)
+          }
+        })
+      }
       const masterPlugins = new MasterOnlyPlugins({
         ids: () => pluginList.ids(),
         wanted: () => masterPluginsWanted(mh),
@@ -630,6 +644,7 @@ export default function (app: ServerAPI): Plugin {
       stopFollowing?.()
       stopFollowing = null
       ownAccess = null
+      apps = null
       masterPluginList = null
       sharedPlugins = null
       masterControl = null
@@ -658,7 +673,8 @@ export default function (app: ServerAPI): Plugin {
         () => masterPluginList,
         () => masterControl?.waitingForApproval(multihelm?.role() === 'master') ?? null,
         () => sharedPlugins,
-        () => dataSharer
+        () => dataSharer,
+        () => apps
       )
     }
   }

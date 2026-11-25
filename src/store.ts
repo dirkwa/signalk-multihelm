@@ -177,6 +177,16 @@ export class MultihelmStore {
     writeAtomic(path.join(this.dir, 'followed-meta.json'), JSON.stringify(paths))
   }
 
+  /** The packages the user does not want on this server, whatever the others have. */
+  loadHiddenApps(): string[] {
+    const raw = readJson(path.join(this.dir, 'hidden-apps.json'))
+    return Value.Check(PathsFileSchema, raw) ? raw : []
+  }
+
+  saveHiddenApps(names: readonly string[]): void {
+    writeAtomic(path.join(this.dir, 'hidden-apps.json'), JSON.stringify(names))
+  }
+
   loadPairedBy(): PairedServer[] {
     const raw = readJson(path.join(this.dir, 'paired-by.json'))
     return Value.Check(PairedServersFileSchema, raw) ? raw : []
