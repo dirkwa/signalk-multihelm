@@ -40,7 +40,6 @@
   "files": [
     "plugin/**/*",
     "public/**/*",
-    "icon.svg",
     "docs/screenshots/*.png"
   ],
   "engines": {
