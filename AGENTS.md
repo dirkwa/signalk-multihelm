@@ -18,15 +18,15 @@ sets by hand on one server (see `README.md`).
   manifests, recording a peer's entry.
 - `store.ts` — state in the data dir: server id, peers (mode 0600, they hold
   tokens), one library per dataset, the paths whose metadata follows the
-  master, the servers paired with this one.
+  master, the servers paired with this one, the apps not wanted here.
 - `peer-client.ts` — HTTP to peers: hello, manifest, file with `Range`
   resume, device access requests. `locatePeer()` works out, when pairing,
   the HTTPS address an HTTP one leads to and the certificate to trust a
   server by that no known CA vouches for; peers keep it as `ca`.
-- `routes.ts` — readonly `hello`/`manifest`/`file`/`shared-data` and
-  `master/*` via `router.access`; admin `status`, `peers`, `paired-by`,
-  `run`, `master-plugins`, `shared-plugins`. `hello` notes the server
-  asking, from its query.
+- `routes.ts` — readonly `hello`/`manifest`/`file`/`shared-data`/`installed`
+  and `master/*` via `router.access`; admin `status`, `peers`, `paired-by`,
+  `run`, `master-plugins`, `shared-plugins`, `apps`, `apps/hidden`. `hello`
+  notes the server asking, from its query.
 - `master-proxy.ts` — `MasterProxy`: on a member, serves the master's GET
   answers under the prefixes plugins registered, with the pairing token.
 - `history-from-master.ts` — `MasterHistory`: on a member, a History API
@@ -89,11 +89,19 @@ sets by hand on one server (see `README.md`).
   `data.multihelmMaster`, unless this server has an alarm of its own on the
   path; silence and acknowledge go both ways, the master's with the control
   token. Matched by path, since notification ids are per server.
+- `installed-apps.ts` — the plugins and webapps on each server:
+  `LocalApps` reads this server's from `/skServer/plugins` and
+  `/skServer/webapps` with the own admin token (kept a minute) and serves
+  them to peers at `installed`; `AppsOverview` reads every answering peer's
+  and `compareApps` lists what is missing here, in another version, or off
+  here, leaving out what the user set aside on this server
+  (`hidden-apps.json`). The panel installs through the App Store's route.
 - `configpanel/` — the settings panel the admin UI shows in place of the
   schema form (Module Federation, `vite.panel.config.ts`): pairing, peers,
   the role, the settings. It uses the admin UI's React through
   `host-shim/`, never a copy of its own, and reaches the server modules by
-  type imports only. `view.ts` holds what can be tested without a browser.
+  type imports only. `view.ts` holds what can be tested without a browser;
+  `install-watch.ts` follows App Store installs through the server events.
 - `console/` — the console web app Signal K serves from `public/`
   (`vite.console.config.ts`, built after the panel, which empties
   `public/`): every server side by side, read from `status`. It bundles its
@@ -105,7 +113,7 @@ sets by hand on one server (see `README.md`).
 - **The `multihelm` PropertyValue and `api.ts` types.** Consumers act on the
   last value; `{ apiVersion: 1 }` without methods means stopped.
 - **Peer routes and their JSON** (`hello`, `manifest`, `file`,
-  `vessel-settings`, `shared-data`) between
+  `vessel-settings`, `shared-data`, `installed`) between
   servers that may run different Multihelm versions: grow by addition and
   bump `PROTOCOL` only for a breaking change. A server asking for `hello`
   says who it is in the query (`from`, `name`, `signalk`, `multihelm`),

@@ -5,6 +5,11 @@ import {
   ago,
   approveAccessUrl,
   approveErrorText,
+  appInstallUrl,
+  installErrorText,
+  installState,
+  newestVersion,
+  serversText,
   peerName,
   roleNotice,
   unpairedServers,
@@ -127,6 +132,67 @@ describe('the configuration panel', () => {
     expect(ago(now - 5 * 60_000, now)).toBe('5 min ago')
     expect(ago(now - 3 * 3_600_000, now)).toBe('3 h ago')
     expect(ago(now - 3 * 86_400_000, now)).toBe('3 days ago')
+  })
+
+  it('installs a package from the App Store, scoped names included', () => {
+    expect(appInstallUrl('@signalk/tracks-plugin', '2.1.0')).toBe(
+      '/skServer/appstore/install/%40signalk/tracks-plugin/2.1.0'
+    )
+    expect(appInstallUrl('signalk-flags', '1.2.0')).toBe(
+      '/skServer/appstore/install/signalk-flags/1.2.0'
+    )
+    for (const [name, version] of [
+      ['../../restore', '1.0.0'],
+      ['@signalk/..', '1.0.0'],
+      ['./x', '1.0.0'],
+      ['@scope//x', '1.0.0'],
+      ['', '1.0.0'],
+      ['signalk-flags', 'npm:other-pkg@1.0.0'],
+      ['signalk-flags', '^1.2.0'],
+      ['signalk-flags', 'https://example.com/x.tgz'],
+      ['signalk-flags', '1.2.0/../../restore']
+    ]) {
+      expect(appInstallUrl(name ?? '', version ?? '')).toBeNull()
+    }
+    expect(appInstallUrl('signalk-flags', '2.0.0-beta.1+b7')).toBe(
+      '/skServer/appstore/install/signalk-flags/2.0.0-beta.1%2Bb7'
+    )
+    expect(installErrorText('HTTP 404')).toMatch(/does not offer/)
+    expect(installErrorText('HTTP 500')).toBe('HTTP 500')
+  })
+
+  it('follows an App Store install to its end', () => {
+    const event = (installing: unknown[]) => ({ type: 'APP_STORE_CHANGED', data: { installing } })
+    expect(installState(event([{ name: 'a', isWaiting: true }]), 'a')).toBe('pending')
+    expect(installState(event([{ name: 'a', isInstalling: true }]), 'a')).toBe('pending')
+    expect(installState(event([{ name: 'a', installFailed: true }]), 'a')).toBe('failed')
+    expect(installState(event([{ name: 'a' }]), 'a')).toBe('done')
+    expect(installState(event([{ name: 'a', isRemove: true }]), 'a')).toBeNull()
+    expect(installState(event([{ name: 'b' }]), 'a')).toBeNull()
+    expect(installState({ type: 'SERVERSTATISTICS', data: {} }, 'a')).toBeNull()
+    expect(installState(null, 'a')).toBeNull()
+  })
+
+  it('picks the newest version and names the servers with theirs', () => {
+    expect(newestVersion(['1.2.0', '1.10.0', '1.9.3'])).toBe('1.10.0')
+    expect(newestVersion(['2.0.0-beta.1'])).toBe('2.0.0-beta.1')
+    expect(newestVersion(['2.0.0-beta.2', '2.0.0-beta.10', '2.0.0-beta.9'])).toBe('2.0.0-beta.10')
+    expect(newestVersion(['2.0.0-beta.10', '2.0.0'])).toBe('2.0.0')
+    expect(newestVersion(['2.0.0', '2.0.0-rc.1'])).toBe('2.0.0')
+    expect(newestVersion(['1.0.0-alpha', '1.0.0-alpha.1', '1.0.0-1'])).toBe('1.0.0-alpha.1')
+    expect(newestVersion(['1.0.0+build.9', '1.0.1+build.1'])).toBe('1.0.1+build.1')
+    expect(newestVersion(['1.0.0-9007199254740993', '1.0.0-9007199254740992'])).toBe(
+      '1.0.0-9007199254740993'
+    )
+    expect(newestVersion(['9007199254740993.0.0', '9007199254740992.0.0'])).toBe(
+      '9007199254740993.0.0'
+    )
+    expect(
+      serversText([
+        { name: 'USVMAIN', version: '1.4.0' },
+        { name: 'Salon', version: '1.3.2' }
+      ])
+    ).toBe('USVMAIN 1.4.0, Salon 1.3.2')
   })
 
   it('explains a failed approval of a request the server no longer holds', () => {
