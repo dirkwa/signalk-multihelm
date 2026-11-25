@@ -12,7 +12,7 @@ import {
   type Attention,
   type InstalledPlugin,
   type ServerColumn
-} from './board.js'
+} from './view.js'
 
 const STATUS_URL = '/plugins/signalk-multihelm/status'
 const PLUGINS_URL = '/skServer/plugins'

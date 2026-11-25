@@ -7,7 +7,7 @@ import {
   masterPluginProblems,
   serverColumns,
   stateText
-} from '../src/console/board.js'
+} from '../src/console/view.js'
 import type { Status } from '../src/status.js'
 
 function status(over: Partial<Status> = {}): Status {
