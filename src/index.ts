@@ -162,6 +162,8 @@ export default function (app: ServerAPI): Plugin {
   let masterControl: MasterControlAccess | null = null
   let dataSharer: DataSharer | null = null
   let planControl: PlanControl | null = null
+  let selfRestart: ReturnType<typeof setTimeout> | null = null
+  let runs = 0
   let apps: { local: LocalApps; overview: AppsOverview } | null = null
 
   function localVesselSettings(): VesselSettings | null {
@@ -379,13 +381,13 @@ export default function (app: ServerAPI): Plugin {
       discovery = new ServerDiscovery(() => host.config?.getExternalPort?.())
       discovery.start()
       mh.start()
+      const run = ++runs
       const own = planSettings(settings)
       // Restarting from inside a dataset round would stop the round that is applying the change.
       const applyOwn = (planned: PlanSettings): void => {
         if (isDeepStrictEqual(planned, own)) {
           return
         }
-        plan.markApplied(planned)
         const configuration = { ...planned, master: isMaster }
         app.savePluginOptions(configuration, (error) => {
           if (error) {
@@ -394,7 +396,19 @@ export default function (app: ServerAPI): Plugin {
             )
             return
           }
-          setTimeout(() => {
+          plan.markApplied(planned)
+          // A run that was stopped meanwhile must not restart the one that replaced it.
+          if (run !== runs) {
+            return
+          }
+          if (selfRestart !== null) {
+            clearTimeout(selfRestart)
+          }
+          selfRestart = setTimeout(() => {
+            selfRestart = null
+            if (run !== runs) {
+              return
+            }
             void Promise.resolve(plugin.stop()).then(() => {
               plugin.start(configuration, () => undefined)
             })
@@ -414,9 +428,11 @@ export default function (app: ServerAPI): Plugin {
       const ownPlan = plan.get(mh.serverId)
       switch (onStart(own, plan.applied(), ownPlan?.settings ?? null)) {
         case 'publish':
-          plan.markApplied(own)
           plan
             .set(mh.serverId, { location: ownPlan?.location ?? '', settings: own })
+            .then(() => {
+              plan.markApplied(own)
+            })
             .catch((error: unknown) => {
               app.error(
                 `Multihelm: cannot put this server's settings in the plan: ${error instanceof Error ? error.message : String(error)}`
@@ -697,6 +713,11 @@ export default function (app: ServerAPI): Plugin {
     },
 
     stop() {
+      runs++
+      if (selfRestart !== null) {
+        clearTimeout(selfRestart)
+        selfRestart = null
+      }
       stopFollowing?.()
       stopFollowing = null
       ownAccess = null

@@ -102,7 +102,12 @@ describe('the boat plan', () => {
 })
 
 describe('the plugin with the plan', () => {
-  function app(saved: object[]): { app: ServerAPI; api: () => MultihelmProperty | undefined } {
+  function app(
+    saved: object[],
+    save: (cb: (err: Error | null) => void) => void = (cb) => {
+      cb(null)
+    }
+  ): { app: ServerAPI; api: () => MultihelmProperty | undefined } {
     let api: MultihelmProperty | undefined
     return {
       api: () => api,
@@ -115,7 +120,7 @@ describe('the plugin with the plan', () => {
         },
         savePluginOptions: (configuration: object, cb: (err: Error | null) => void) => {
           saved.push(configuration)
-          cb(null)
+          save(cb)
         },
         setPluginStatus: () => undefined,
         debug: () => undefined,
@@ -153,5 +158,68 @@ describe('the plugin with the plan', () => {
       expect(api()?.serverId?.()).toBe(id)
     })
     void plugin.stop()
+  })
+
+  async function planChangedElsewhere(
+    host: ServerAPI,
+    api: () => MultihelmProperty | undefined
+  ): Promise<{ plugin: ReturnType<typeof createPlugin>; planned: ServerPlan }> {
+    const plugin = createPlugin(host)
+    plugin.start({ takeOver: 1 }, () => undefined)
+    const id = api()?.serverId?.() ?? ''
+    await vi.waitFor(() => {
+      expect(fs.existsSync(path.join(dir, 'plan', 'applied.json'))).toBe(true)
+    })
+    void plugin.stop()
+    const planned: ServerPlan = {
+      location: '',
+      settings: settings({ takeOver: 1, alarmsFromMaster: false })
+    }
+    fs.writeFileSync(path.join(dir, 'plan', 'plan.json'), JSON.stringify({ [id]: planned }))
+    return { plugin, planned }
+  }
+
+  function applied(): unknown {
+    return JSON.parse(fs.readFileSync(path.join(dir, 'plan', 'applied.json'), 'utf8'))
+  }
+
+  it('keeps the settings it last applied when saving the planned ones fails', async () => {
+    const saved: object[] = []
+    let fail = false
+    const { app: host, api } = app(saved, (cb) => {
+      cb(fail ? new Error('disk full') : null)
+    })
+    const { plugin } = await planChangedElsewhere(host, api)
+    fail = true
+    plugin.start({ takeOver: 1 }, () => undefined)
+    await vi.waitFor(() => {
+      expect(saved).toHaveLength(1)
+    })
+    expect(applied()).toEqual(settings({ takeOver: 1 }))
+    void plugin.stop()
+  })
+
+  it('does not restart once it was stopped while the planned settings were being saved', async () => {
+    const saved: object[] = []
+    const pending: ((err: Error | null) => void)[] = []
+    let hold = false
+    const { app: host, api } = app(saved, (cb) => {
+      if (hold) {
+        pending.push(cb)
+      } else {
+        cb(null)
+      }
+    })
+    const { plugin, planned } = await planChangedElsewhere(host, api)
+    hold = true
+    plugin.start({ takeOver: 1 }, () => undefined)
+    await vi.waitFor(() => {
+      expect(pending).toHaveLength(1)
+    })
+    void plugin.stop()
+    pending[0]?.(null)
+    await new Promise((resolve) => setTimeout(resolve, 20))
+    expect(api()?.serverId).toBeUndefined()
+    expect(applied()).toEqual(planned.settings)
   })
 })
