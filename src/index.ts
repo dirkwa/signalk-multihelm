@@ -396,7 +396,13 @@ export default function (app: ServerAPI): Plugin {
             )
             return
           }
-          plan.markApplied(planned)
+          try {
+            plan.markApplied(planned)
+          } catch (e) {
+            app.error(
+              `Multihelm: cannot record the settings applied on this server: ${e instanceof Error ? e.message : String(e)}`
+            )
+          }
           // A run that was stopped meanwhile must not restart the one that replaced it.
           if (run !== runs) {
             return
