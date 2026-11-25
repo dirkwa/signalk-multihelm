@@ -98,6 +98,7 @@ describe('the console board', () => {
     )
     expect(announced?.pairUrl).toBe('https://192.0.2.20:3443')
     expect(settingsNote(announced ?? fail())).toContain('pair this server with pi5radar too')
+    expect(settingsNote(announced ?? fail(), true)).toMatch(/^To keep both in step, pair/)
 
     const [, unknown] = serverColumns(status({ pairedBy }))
     expect(unknown?.pairUrl).toBeUndefined()

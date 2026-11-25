@@ -100,11 +100,12 @@ function knowsPlan(version: string): boolean {
 }
 
 /** What a card says when the console cannot change that server's settings. */
-export function settingsNote(column: ServerColumn): string {
+export function settingsNote(column: ServerColumn, planned = false): string {
   if (column.oneWay) {
+    const goal = planned ? 'To keep both in step' : 'To see and change its settings here'
     return column.pairUrl === undefined
-      ? `To see and change its settings here, pair this server with ${column.name} too: in Settings, under "Pair with another server", enter its address.`
-      : `To see and change its settings here, pair this server with ${column.name} too. ${column.name} then asks for your approval.`
+      ? `${goal}, pair this server with ${column.name} too: in Settings, under "Pair with another server", enter its address.`
+      : `${goal}, pair this server with ${column.name} too. ${column.name} then asks for your approval.`
   }
   return column.multihelm !== undefined && knowsPlan(column.multihelm)
     ? 'Its settings show here once it has answered this server.'

@@ -312,19 +312,16 @@ function ServerCard({ column, now, masterPlugins, installed, plan, edit }: Serve
         </div>
       )}
       <div className="server-actions">
-        {plan ? (
+        {plan && (
           <button type="button" className="button" onClick={edit}>
             Settings
           </button>
-        ) : (
-          !column.here && (
-            <>
-              <p className="muted">{settingsNote(column)}</p>
-              {column.pairUrl !== undefined && (
-                <PairButton name={column.name} url={column.pairUrl} />
-              )}
-            </>
-          )
+        )}
+        {!column.here && (!plan || column.oneWay) && (
+          <p className="muted">{settingsNote(column, plan !== undefined)}</p>
+        )}
+        {column.oneWay && column.pairUrl !== undefined && (
+          <PairButton name={column.name} url={column.pairUrl} />
         )}
       </div>
     </article>
