@@ -6,7 +6,6 @@ import {
   attention,
   consoleRoleNotice,
   installedPlugins,
-  PEERS_URL,
   pluginName,
   serverColumns,
   SETTINGS_URL,
@@ -16,6 +15,10 @@ import {
   type InstalledPlugin,
   type ServerColumn
 } from './view.js'
+import { Apps } from './Apps.js'
+import { errorText } from './http.js'
+import { AddServer, forget, pair, unpair } from './Pairing.js'
+import { PluginListCard, PluginListEditor, type ListName } from './PluginLists.js'
 import { ServerSettings } from './ServerSettings.js'
 
 const STATUS_URL = '/plugins/signalk-multihelm/status'
@@ -104,6 +107,7 @@ export function Board() {
   const plugins = usePolled(PLUGINS_URL, PLUGINS_POLL_MS, installedPlugins)
   const now = useNow()
   const [editing, setEditing] = useState<ServerColumn | null>(null)
+  const [editingList, setEditingList] = useState<ListName | null>(null)
 
   if (!status.value) {
     return (
@@ -181,13 +185,37 @@ export function Board() {
         </p>
       )}
       <section className="boat" aria-label="The whole boat">
-        <BoatCard
-          title="Same settings on every server"
-          empty="No plugins chosen."
-          items={s.sharedPlugins.map((id) => pluginName(id, installed))}
+        <PluginListCard
+          name="master-plugins"
+          current={s.masterPlugins}
+          installed={installed}
+          edit={() => {
+            setEditingList('master-plugins')
+          }}
         />
+        <PluginListCard
+          name="shared-plugins"
+          current={s.sharedPlugins}
+          installed={installed}
+          edit={() => {
+            setEditingList('shared-plugins')
+          }}
+        />
+        <AddServer status={s} />
         <BoatCard title="Kept in step" empty="Nothing registered." items={s.datasets} />
+        <Apps />
       </section>
+      {editingList && (
+        <PluginListEditor
+          key={editingList}
+          name={editingList}
+          current={editingList === 'master-plugins' ? s.masterPlugins : s.sharedPlugins}
+          installed={installed}
+          close={() => {
+            setEditingList(null)
+          }}
+        />
+      )}
       {editing && s.plan?.[editing.id] && (
         <ServerSettings
           key={editing.id}
@@ -203,7 +231,7 @@ export function Board() {
       )}
       <p className="footer">
         <a className="button" href={SETTINGS_URL}>
-          Settings
+          Master setting of this server
         </a>
       </p>
     </main>
@@ -218,30 +246,29 @@ function Header({ version }: { version?: string | undefined }) {
   )
 }
 
-async function pair(url: string): Promise<void> {
-  const res = await fetch(PEERS_URL, {
-    method: 'POST',
-    credentials: 'same-origin',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ url })
-  })
-  if (!res.ok) {
-    const body = (await res.json().catch(() => ({}))) as { error?: unknown }
-    throw new Error(typeof body.error === 'string' ? body.error : `HTTP ${String(res.status)}`)
-  }
+interface ActionProps {
+  label: string
+  busyLabel: string
+  action: () => Promise<unknown>
+  /** Asked before acting, for what cannot be taken back with one tap. */
+  confirm?: string
 }
 
-function PairButton({ name, url }: { name: string; url: string }) {
-  const [pairing, setPairing] = useState(false)
+function ActionButton({ label, busyLabel, action, confirm }: ActionProps) {
+  const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const start = async (): Promise<void> => {
-    setPairing(true)
+    if (confirm !== undefined && !window.confirm(confirm)) {
+      return
+    }
+    setBusy(true)
     setError(null)
     try {
-      await pair(url)
+      await action()
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e))
-      setPairing(false)
+      setError(errorText(e))
+    } finally {
+      setBusy(false)
     }
   }
   return (
@@ -249,12 +276,12 @@ function PairButton({ name, url }: { name: string; url: string }) {
       <button
         type="button"
         className="button"
-        disabled={pairing}
+        disabled={busy}
         onClick={() => {
           void start()
         }}
       >
-        {pairing ? 'Pairing…' : `Pair with ${name}`}
+        {busy ? busyLabel : label}
       </button>
       {error && <p className="banner tone-danger">{error}</p>}
     </>
@@ -321,7 +348,34 @@ function ServerCard({ column, now, masterPlugins, installed, plan, edit }: Serve
           <p className="muted">{settingsNote(column, plan !== undefined)}</p>
         )}
         {column.oneWay && column.pairUrl !== undefined && (
-          <PairButton name={column.name} url={column.pairUrl} />
+          <ActionButton
+            label={`Pair with ${column.name}`}
+            busyLabel="Pairing…"
+            action={() => pair(column.pairUrl ?? '')}
+          />
+        )}
+        {column.state === 'needs-pairing' && column.url !== undefined && (
+          <ActionButton
+            label="Pair again"
+            busyLabel="Pairing…"
+            action={() => pair(column.url ?? '')}
+          />
+        )}
+        {column.oneWay && column.state === 'offline' && (
+          <ActionButton
+            label="Forget"
+            busyLabel="Forgetting…"
+            confirm={`Take ${column.name} off the board? It comes back once it asks this server again.`}
+            action={() => forget(column.id)}
+          />
+        )}
+        {!column.here && !column.oneWay && column.url !== undefined && (
+          <ActionButton
+            label="Unpair"
+            busyLabel="Unpairing…"
+            confirm={`Stop taking over what ${column.name} shares?`}
+            action={() => unpair(column.url ?? '')}
+          />
         )}
       </div>
     </article>

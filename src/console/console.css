@@ -346,6 +346,18 @@ button.button:disabled {
   border-bottom: 1px solid var(--line);
 }
 
+.help {
+  display: block;
+  margin-top: 2px;
+  color: var(--muted);
+  font-size: 0.85rem;
+  font-weight: normal;
+}
+
+.switch-row {
+  padding: 8px 0;
+}
+
 .switch-row input {
   width: 28px;
   height: 28px;
@@ -357,4 +369,71 @@ button.button:disabled {
   display: flex;
   justify-content: flex-end;
   margin-top: 20px;
+}
+
+.card-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.boat-card.wide {
+  grid-column: 1 / -1;
+}
+
+.boat-card h4 {
+  margin: 16px 0 8px;
+  font-size: 1rem;
+}
+
+.found {
+  margin: 8px 0;
+  padding: 0;
+  list-style: none;
+}
+
+.found li {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-height: 56px;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--line);
+}
+
+.row-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.address {
+  display: flex;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.address input {
+  flex: 1;
+  min-width: 0;
+  min-height: 48px;
+  padding: 0 12px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--bg);
+  color: inherit;
+  font: inherit;
+}
+
+.link-button {
+  padding: 4px 0;
+  border: none;
+  margin-right: 12px;
+  background: none;
+  color: var(--accent);
+  font: inherit;
+  cursor: pointer;
 }

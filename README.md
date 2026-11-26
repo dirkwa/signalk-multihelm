@@ -16,17 +16,20 @@ chart files and shared ENC cells.
 ## Pairing
 
 Install Multihelm on every server and set **This server is the boat's
-master** on one of them ([The master](#the-master)). Then, on each of the
-others, open **Server → Plugin Config → Multihelm** and:
+master** on one of them in its plugin settings
+([The master](#the-master)). Then, on each of the others, open the Multihelm
+console from the web apps and:
 
-1. **Pair** with the master: pick it from the servers found on the network,
-   or enter its address.
+1. **Pair** with the master under **Pair with another server**: pick it from
+   the servers found on the network, or enter its address.
 2. **Approve on the master**: log in there and approve the request
    “Multihelm on _this server_” under **Security → Access Requests**. The
-   settings link to it and show the pairing as soon as it is approved.
-3. **Allow on this server**: once paired, the settings ask for admin access
+   console links to it and shows the master's card as soon as it is
+   approved.
+3. **Allow on this server**: once paired, Multihelm asks for admin access
    to this server, to write the master's vessel data, metadata and source
-   priorities here. Click **Allow**.
+   priorities here. Click **Allow** in its plugin settings, or approve it
+   under **Security → Access Requests**.
 
 A server without security needs no approval. Every plugin that uses
 Multihelm shares the pairing.
@@ -36,10 +39,12 @@ server with the master is enough for the master's settings, history and
 services; for datasets that go both ways, such as charts, pair the other
 server with it too.
 
-The settings show each paired server online or offline, with its Signal K
-and Multihelm versions and why it cannot be reached. Every server also lists
-the servers paired with it, so the master shows the others; a server on an
-older Multihelm version is not listed there until it is updated.
+The console shows each paired server online or offline, with its Signal K
+and Multihelm versions and why it cannot be reached, and **Unpair** or
+**Pair again** on its card. Every server also shows the servers paired with
+it, so the master shows the others; a server on an older Multihelm version
+is not shown there until it is updated, and one gone for good can be
+forgotten from its card.
 
 Servers with SSL on are paired the same way, by their HTTPS address or their
 HTTP one, which then leads to HTTPS. When no CA that Node knows has signed a
@@ -48,7 +53,7 @@ server's certificate, as when Signal K made it or
 trusts the certificate the server presents when it is paired: the CA's, with
 signalk-ssl, so the server's renewed certificates are trusted as well. Should
 the certificate change for good, or a server paired over HTTP turn SSL on,
-its settings ask to pair it again.
+its card in the console asks to pair it again.
 
 Needs Signal K server 2.31 or later: peers read the replication routes with a
 readonly device token.
@@ -70,15 +75,19 @@ here: where it is on board, its place to take over as master, what it takes
 over from the master and what it shares. They are kept in step as the boat
 plan, with no master, so the change reaches that server within a round and
 Multihelm restarts there with it, while the server is off too, as soon as it
-is back. A change made in a server's own plugin settings goes to the plan the
-same way. Only **This server is the boat's master** stays in each server's own
+is back. Only **This server is the boat's master** stays in each server's own
 plugin settings, so the boat keeps its master whatever happens to the plan. A
 server on an older Multihelm has no entry in the plan; change its settings
 there.
 
+Pairing, the plugins that run on the master only or with the same settings
+on every server, and the apps the other servers have are in the console
+too. The plugin settings keep only the master setting and the request for
+Multihelm's own admin access.
+
 ![A server's settings in the console, opened from its card](docs/screenshots/console-settings.png)
 
-![The console: three servers side by side, the master with the plugins it runs for the boat, an offline server, and a request waiting for approval](docs/screenshots/console.png)
+![The console: three servers side by side, the master with the plugin it runs for the boat, a server that only pairs with this one, the plugin lists, pairing and the apps another server has](docs/screenshots/console.png)
 
 ## Routes and waypoints
 
@@ -157,7 +166,7 @@ role moves within seconds.
 
 Some plugins must run on one server only: an autopilot provider, for
 example, so that only one server sends commands to the autopilot. Tick them
-under **Plugins that run on the master only** in Multihelm's settings. The
+under **Run on the master only** in the console. The
 list is the same on every server: it is kept in step like the routes, so it
 can be changed on any of them, and a server that becomes the master already
 knows it.
@@ -175,9 +184,9 @@ taking the vessel settings over (see below), on the master too.
 ## Plugins with the same settings on every server
 
 Some plugins keep everything in their plugin settings, such as
-signalk-buddylist-plugin with its buddy list. Tick them under **Plugins with
-the same settings on every server**, on the server whose settings you want
-to keep: that server offers them, and the others take them over. After that,
+signalk-buddylist-plugin with its buddy list. Tick them under **Same
+settings on every server** in the console of the server whose settings you
+want to keep: that server offers them, and the others take them over. After that,
 a change made on any server goes to all of them within a round, with no
 master; two changes made at the same time end on the same one everywhere.
 The list itself is the same on every server.
@@ -191,8 +200,8 @@ server as they are.
 
 ## Apps the other servers have
 
-A server set up later lacks the apps the others were given over time. In the
-Multihelm settings, **Apps on the other servers** lists the plugins and
+A server set up later lacks the apps the others were given over time. In its
+console, **Apps on the other servers** lists the plugins and
 webapps a paired server has and this one does not, those installed here in
 another version, and the plugins switched off here but on elsewhere.
 **Install** installs the other server's version from the App Store; restart
@@ -207,8 +216,7 @@ older Multihelm is shown as such.
 
 A server can have a source of its own that the others do not see, such as
 engine data from a J1939 bus or a whole NMEA 2000 bus in the engine room. In
-its Multihelm settings, under **Data only this server sees**, list the paths
-to share (one per line, `*` for any part, such as `propulsion.*`) or tick the
+its **Settings** in the console, list the paths to share (one per line, `*` for any part, such as `propulsion.*`) or tick the
 data connections whose every value is to be shared. Every other paired
 server then shows those values, at most once a second per path and source,
 under the source `multihelm.<that server>.<source>`, such as
@@ -244,8 +252,8 @@ Priorities**, and follow every change once a minute. A change made on another
 server is replaced by the master's. GPS antenna positions stay with each
 server, and so does the metadata of a path the master has none for, such as
 a device that only one server reads; metadata the master removes goes on the
-other servers too. Each of the three can be turned off per server in the
-plugin settings.
+other servers too. Each of the three can be turned off per server in its
+**Settings** in the console.
 
 Source priorities name a source by its connection, such as `can0.115`, so
 they match on another server only where the source comes in under the same
@@ -256,7 +264,7 @@ source only that server has is in none of the master's groups. While none
 are set on the master, each server keeps its own.
 
 To write them so they survive a restart, Multihelm asks its own server once
-for admin access: click **Allow** in its settings on each server that is not
+for admin access: click **Allow** in its plugin settings on each server that is not
 the master, or approve it under **Security -> Access Requests** there. A
 server without security needs nothing. A new MMSI takes effect on that server
 at its next restart, as when it is changed by hand.
