@@ -6,7 +6,9 @@ import {
   attention,
   consoleRoleNotice,
   installedPlugins,
+  listShown,
   pluginName,
+  type SavedLists,
   serverColumns,
   SETTINGS_URL,
   settingsNote,
@@ -45,7 +47,9 @@ class LoginNeeded extends Error {}
 function usePolled<T>(url: string, everyMs: number, parse: (raw: unknown) => T) {
   const [value, setValue] = useState<T | null>(null)
   const [load, setLoad] = useState<Load>({ state: 'loading' })
-  const reader = useRef<() => Promise<void>>(() => Promise.resolve())
+  /** The number of the read the value came from; reads are numbered as they are made. */
+  const [readNo, setReadNo] = useState(0)
+  const reader = useRef<() => number>(() => 0)
   useEffect(() => {
     let stopped = false
     // A slow answer must not overwrite a later one that came first.
@@ -58,12 +62,13 @@ function usePolled<T>(url: string, everyMs: number, parse: (raw: unknown) => T) 
       applied = request
       return true
     }
-    const read = (): Promise<void> => {
+    const read = (): number => {
       const request = ++issued
-      return getJson(url).then(
+      void getJson(url).then(
         (raw) => {
           if (current(request)) {
             setValue(parse(raw))
+            setReadNo(request)
             setLoad({ state: 'ok' })
           }
         },
@@ -77,18 +82,19 @@ function usePolled<T>(url: string, everyMs: number, parse: (raw: unknown) => T) 
           }
         }
       )
+      return request
     }
     reader.current = read
-    void read()
-    const timer = setInterval(() => void read(), everyMs)
+    read()
+    const timer = setInterval(read, everyMs)
     return () => {
       stopped = true
       clearInterval(timer)
     }
   }, [url, everyMs, parse])
-  /** Reads at once; resolves once that answer, or a later one, is in. */
+  /** Reads at once, and returns the number of that read. */
   const reload = useCallback(() => reader.current(), [])
-  return { value, load, reload }
+  return { value, load, readNo, reload }
 }
 
 const asStatus = (raw: unknown): Status => raw as Status
@@ -113,7 +119,7 @@ export function Board() {
   const [editing, setEditing] = useState<ServerColumn | null>(null)
   const [editingList, setEditingList] = useState<ListName | null>(null)
   // A list just saved stands until a status read made after the save has it.
-  const [savedLists, setSavedLists] = useState<Partial<Record<ListName, string[]>>>({})
+  const [savedLists, setSavedLists] = useState<SavedLists>({})
 
   if (!status.value) {
     return (
@@ -157,8 +163,8 @@ export function Board() {
           : "Cannot read this server's plugins just now; what is said about them may be out of date."
     })
   }
-  const masterPlugins = savedLists['master-plugins'] ?? s.masterPlugins
-  const sharedPlugins = savedLists['shared-plugins'] ?? s.sharedPlugins
+  const masterPlugins = listShown(s.masterPlugins, status.readNo, savedLists['master-plugins'])
+  const sharedPlugins = listShown(s.sharedPlugins, status.readNo, savedLists['shared-plugins'])
   const columns = serverColumns(s)
   const masterKnown = columns.some((c) => c.master)
 
@@ -220,15 +226,8 @@ export function Board() {
           current={editingList === 'master-plugins' ? masterPlugins : sharedPlugins}
           installed={installed}
           saved={(name, ids) => {
-            setSavedLists((lists) => ({ ...lists, [name]: ids }))
-            void status.reload().finally(() => {
-              setSavedLists((lists) => {
-                const rest = { ...lists }
-                // eslint-disable-next-line @typescript-eslint/no-dynamic-delete
-                delete rest[name]
-                return rest
-              })
-            })
+            const read = status.reload()
+            setSavedLists((lists) => ({ ...lists, [name]: { ids, read } }))
           }}
           close={() => {
             setEditingList(null)

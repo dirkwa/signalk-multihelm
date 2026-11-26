@@ -5,6 +5,7 @@ import {
   attention,
   consoleRoleNotice,
   installedPlugins,
+  listShown,
   masterPluginProblems,
   pluginChoices,
   serverColumns,
@@ -111,6 +112,23 @@ describe('the console board', () => {
       { id: 'aa', name: 'Zigbee', installed: true },
       { id: 'gone', name: 'gone', installed: false }
     ])
+  })
+
+  it('shows a list saved here until a status read made after the save has it', () => {
+    const saved = { ids: ['autopilot', 'rules'], read: 7 }
+    expect(listShown(['autopilot'], 6, saved)).toEqual(['autopilot', 'rules'])
+    // A failed read changes no read number, so the saved list stays.
+    expect(listShown(['autopilot'], 6, saved)).toEqual(['autopilot', 'rules'])
+    expect(listShown(['autopilot', 'rules'], 7, saved)).toEqual(['autopilot', 'rules'])
+    expect(listShown(['rules'], 9, saved)).toEqual(['rules'])
+    expect(listShown(['autopilot'], 9)).toEqual(['autopilot'])
+  })
+
+  it('keeps a later save of the same list against a read made before it', () => {
+    const first = { ids: ['a'], read: 3 }
+    const second = { ids: ['a', 'b'], read: 5 }
+    expect(listShown(['a'], 4, first)).toEqual(['a'])
+    expect(listShown(['a'], 4, second)).toEqual(['a', 'b'])
   })
 
   it("shows this server's own versions", () => {
