@@ -6,10 +6,10 @@ import {
   attention,
   consoleRoleNotice,
   installedPlugins,
-  listShown,
   placedOn,
   pluginName,
-  type SavedLists,
+  type SavedEdits,
+  shownAfterSave,
   serverColumns,
   SETTINGS_URL,
   settingsNote,
@@ -120,8 +120,8 @@ export function Board() {
   const now = useNow()
   const [editing, setEditing] = useState<ServerColumn | null>(null)
   const [editingList, setEditingList] = useState<ListName | 'placement' | null>(null)
-  // A list just saved stands until a status read made after the save has it.
-  const [savedLists, setSavedLists] = useState<SavedLists>({})
+  // What was just saved stands until a status read made after the save has it.
+  const [saved, setSaved] = useState<SavedEdits>({})
 
   if (!status.value) {
     return (
@@ -165,10 +165,10 @@ export function Board() {
           : "Cannot read this server's plugins just now; what is said about them may be out of date."
     })
   }
-  const masterPlugins = listShown(s.masterPlugins, status.readNo, savedLists['master-plugins'])
-  const sharedPlugins = listShown(s.sharedPlugins, status.readNo, savedLists['shared-plugins'])
+  const masterPlugins = shownAfterSave(s.masterPlugins, status.readNo, saved['master-plugins'])
+  const sharedPlugins = shownAfterSave(s.sharedPlugins, status.readNo, saved['shared-plugins'])
   const columns = serverColumns(s)
-  const placement = s.placement ?? {}
+  const placement = shownAfterSave(s.placement ?? {}, status.readNo, saved.placement)
   const placed = placedOn(placement, columns)
   const masterKnown = columns.some((c) => c.master)
 
@@ -239,9 +239,13 @@ export function Board() {
       {editingList === 'placement' && (
         <PlacementEditor
           placement={placement}
-          masterPlugins={s.masterPlugins}
+          masterPlugins={masterPlugins}
           columns={columns}
           installed={installed}
+          saved={(value) => {
+            const read = status.reload()
+            setSaved((edits) => ({ ...edits, placement: { value, read } }))
+          }}
           close={() => {
             setEditingList(null)
           }}
@@ -255,7 +259,7 @@ export function Board() {
           installed={installed}
           saved={(name, ids) => {
             const read = status.reload()
-            setSavedLists((lists) => ({ ...lists, [name]: { ids, read } }))
+            setSaved((edits) => ({ ...edits, [name]: { value: ids, read } }))
           }}
           close={() => {
             setEditingList(null)

@@ -155,21 +155,25 @@ export function pluginChoices(installed: InstalledPlugin[], listed: string[]): P
 
 const MULTIHELM_ID = 'signalk-multihelm'
 
-/** A list saved from the console, and the status read made right after the save. */
-export interface SavedList {
-  ids: string[]
+/** What was saved from the console, and the status read made right after the save. */
+export interface Saved<T> {
+  value: T
   read: number
 }
 
-export type SavedLists = Partial<Record<'master-plugins' | 'shared-plugins', SavedList>>
+export interface SavedEdits {
+  'master-plugins'?: Saved<string[]>
+  'shared-plugins'?: Saved<string[]>
+  placement?: Saved<Placement>
+}
 
 /**
- * The list to show: the one saved here until a status read made after the
+ * What to show: the value saved here until a status read made after the
  * save has come in; a failed read leaves it, and an older read cannot
  * replace a later save, as only a newer read number does.
  */
-export function listShown(fromStatus: string[], statusRead: number, saved?: SavedList): string[] {
-  return saved !== undefined && statusRead < saved.read ? saved.ids : fromStatus
+export function shownAfterSave<T>(fromStatus: T, statusRead: number, saved?: Saved<T>): T {
+  return saved !== undefined && statusRead < saved.read ? saved.value : fromStatus
 }
 
 /**

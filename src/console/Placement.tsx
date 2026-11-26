@@ -51,6 +51,7 @@ interface EditorProps {
   masterPlugins: string[]
   columns: ServerColumn[]
   installed: InstalledPlugin[]
+  saved: (placement: Placement) => void
   close: () => void
 }
 
@@ -59,6 +60,7 @@ export function PlacementEditor({
   masterPlugins,
   columns,
   installed,
+  saved,
   close
 }: EditorProps) {
   const [draft, setDraft] = useState<Placement>(placement)
@@ -93,6 +95,7 @@ export function PlacementEditor({
         Object.entries(draft).filter(([, order]) => order.length > 0)
       )
       await send(`${BASE}/placement`, 'PUT', { plugins })
+      saved(plugins)
       close()
     } catch (e) {
       setError(errorText(e))
