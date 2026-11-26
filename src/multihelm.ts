@@ -779,10 +779,6 @@ export class Multihelm {
         }
       }
     }
-    // A stopped instance writes nothing: the next start lists again, and its data dir may be gone.
-    if (this.stopped) {
-      return
-    }
     // Hashes stay unknown for entries whose files could not be read: those are held back.
     this.store.saveLibrary(id, dataset.library)
   }
