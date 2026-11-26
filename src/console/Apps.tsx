@@ -22,6 +22,8 @@ export function Apps() {
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState<string | null>(null)
   const [installs, setInstalls] = useState<Record<string, WatchedState>>({})
+  // The version each install was for, so a newer one offered later can be installed in turn.
+  const [targets, setTargets] = useState<Record<string, string>>({})
   const [watching, setWatching] = useState(true)
   const watcher = useRef<InstallWatch | null>(null)
 
@@ -95,6 +97,7 @@ export function Apps() {
       if (!url) {
         throw new Error(`${app.name} ${version} is not a package the App Store installs`)
       }
+      setTargets((t) => ({ ...t, [app.name]: version }))
       watcher.current?.begin(app.name)
       await call(url, { method: 'POST' }).catch((e: unknown) => {
         watcher.current?.cancel(app.name)
@@ -109,7 +112,10 @@ export function Apps() {
     })
 
   const row = (app: AppElsewhere, detail: string, installable: boolean) => {
-    const state = installs[app.name]
+    const target = newestVersion(app.servers.map((s) => s.version))
+    const attempt = installs[app.name]
+    // A finished install of an older version no longer counts once a newer one is offered.
+    const state = attempt === 'done' && targets[app.name] !== target ? undefined : attempt
     return (
       <li key={app.name}>
         <span>

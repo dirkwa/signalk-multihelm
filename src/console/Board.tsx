@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 
 import type { ServerPlan } from '../plan.js'
 import type { Status } from '../status.js'
@@ -45,6 +45,7 @@ class LoginNeeded extends Error {}
 function usePolled<T>(url: string, everyMs: number, parse: (raw: unknown) => T) {
   const [value, setValue] = useState<T | null>(null)
   const [load, setLoad] = useState<Load>({ state: 'loading' })
+  const reader = useRef<() => Promise<void>>(() => Promise.resolve())
   useEffect(() => {
     let stopped = false
     // A slow answer must not overwrite a later one that came first.
@@ -57,9 +58,9 @@ function usePolled<T>(url: string, everyMs: number, parse: (raw: unknown) => T) 
       applied = request
       return true
     }
-    const read = (): void => {
+    const read = (): Promise<void> => {
       const request = ++issued
-      getJson(url).then(
+      return getJson(url).then(
         (raw) => {
           if (current(request)) {
             setValue(parse(raw))
@@ -77,14 +78,17 @@ function usePolled<T>(url: string, everyMs: number, parse: (raw: unknown) => T) 
         }
       )
     }
-    read()
-    const timer = setInterval(read, everyMs)
+    reader.current = read
+    void read()
+    const timer = setInterval(() => void read(), everyMs)
     return () => {
       stopped = true
       clearInterval(timer)
     }
   }, [url, everyMs, parse])
-  return { value, load }
+  /** Reads at once; resolves once that answer, or a later one, is in. */
+  const reload = useCallback(() => reader.current(), [])
+  return { value, load, reload }
 }
 
 const asStatus = (raw: unknown): Status => raw as Status
@@ -108,6 +112,8 @@ export function Board() {
   const now = useNow()
   const [editing, setEditing] = useState<ServerColumn | null>(null)
   const [editingList, setEditingList] = useState<ListName | null>(null)
+  // A list just saved stands until a status read made after the save has it.
+  const [savedLists, setSavedLists] = useState<Partial<Record<ListName, string[]>>>({})
 
   if (!status.value) {
     return (
@@ -151,6 +157,8 @@ export function Board() {
           : "Cannot read this server's plugins just now; what is said about them may be out of date."
     })
   }
+  const masterPlugins = savedLists['master-plugins'] ?? s.masterPlugins
+  const sharedPlugins = savedLists['shared-plugins'] ?? s.sharedPlugins
   const columns = serverColumns(s)
   const masterKnown = columns.some((c) => c.master)
 
@@ -187,7 +195,7 @@ export function Board() {
       <section className="boat" aria-label="The whole boat">
         <PluginListCard
           name="master-plugins"
-          current={s.masterPlugins}
+          current={masterPlugins}
           installed={installed}
           edit={() => {
             setEditingList('master-plugins')
@@ -195,7 +203,7 @@ export function Board() {
         />
         <PluginListCard
           name="shared-plugins"
-          current={s.sharedPlugins}
+          current={sharedPlugins}
           installed={installed}
           edit={() => {
             setEditingList('shared-plugins')
@@ -209,8 +217,19 @@ export function Board() {
         <PluginListEditor
           key={editingList}
           name={editingList}
-          current={editingList === 'master-plugins' ? s.masterPlugins : s.sharedPlugins}
+          current={editingList === 'master-plugins' ? masterPlugins : sharedPlugins}
           installed={installed}
+          saved={(name, ids) => {
+            setSavedLists((lists) => ({ ...lists, [name]: ids }))
+            void status.reload().finally(() => {
+              setSavedLists((lists) => {
+                const rest = { ...lists }
+                // eslint-disable-next-line @typescript-eslint/no-dynamic-delete
+                delete rest[name]
+                return rest
+              })
+            })
+          }}
           close={() => {
             setEditingList(null)
           }}

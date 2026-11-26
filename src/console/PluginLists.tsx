@@ -53,21 +53,31 @@ interface EditorProps {
   name: ListName
   current: string[]
   installed: InstalledPlugin[]
+  saved: (name: ListName, ids: string[]) => void
   close: () => void
 }
 
-export function PluginListEditor({ name, current, installed, close }: EditorProps) {
+export function PluginListEditor({ name, current, installed, saved, close }: EditorProps) {
   const list = LISTS[name]
   const [chosen, setChosen] = useState(current)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const choices = pluginChoices(installed, current)
+  // What Save sends stays on screen, even once another server took it off the list.
+  const choices = pluginChoices(installed, [...new Set([...current, ...chosen])])
 
   const save = async (): Promise<void> => {
     setSaving(true)
     setError(null)
     try {
-      await send(`${BASE}/${name}`, 'PUT', { plugins: chosen })
+      const answer = (await send(`${BASE}/${name}`, 'PUT', { plugins: chosen })) as {
+        plugins?: unknown
+      }
+      saved(
+        name,
+        Array.isArray(answer.plugins)
+          ? answer.plugins.filter((id): id is string => typeof id === 'string')
+          : chosen
+      )
       close()
     } catch (e) {
       setError(errorText(e))
