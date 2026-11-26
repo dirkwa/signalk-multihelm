@@ -15,7 +15,8 @@ export default defineConfig({
     react(),
     checker({ typescript: { root: here, tsconfigPath: 'src/console/tsconfig.json' } })
   ],
-  publicDir: false,
+  // The icon the admin UI's Webapps list and the browser tab show.
+  publicDir: fileURLToPath(new URL('static', import.meta.url)),
   build: {
     outDir: fileURLToPath(new URL('public', import.meta.url)),
     // The panel's build has just written its files there.

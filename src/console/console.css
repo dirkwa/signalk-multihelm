@@ -54,6 +54,12 @@ h1 {
   font-size: 1.6rem;
 }
 
+h1 .version {
+  color: var(--muted);
+  font-size: 1rem;
+  font-weight: normal;
+}
+
 h2 {
   margin: 0;
   font-size: 1.3rem;
@@ -245,6 +251,9 @@ li {
 }
 
 .server-actions {
+  display: grid;
+  justify-items: start;
+  gap: 8px;
   margin-top: auto;
   padding-top: 16px;
 }

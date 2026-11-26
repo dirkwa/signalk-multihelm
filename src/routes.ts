@@ -209,11 +209,14 @@ export function registerRoutes(
 
   router.get('/status', (_req: Request, res: Response) => {
     const mh = multihelm()
+    const hello = mh?.hello()
     const status: Status = {
       available,
       running: mh !== null,
       serverId: mh?.serverId ?? null,
-      name: mh?.hello().name ?? '',
+      name: hello?.name ?? '',
+      ...(hello?.signalk ? { signalk: hello.signalk } : {}),
+      ...(hello?.multihelm ? { multihelm: hello.multihelm } : {}),
       role: mh?.role() ?? null,
       master: mh?.master() ?? null,
       masterConflict: mh?.masterConflict() ?? false,

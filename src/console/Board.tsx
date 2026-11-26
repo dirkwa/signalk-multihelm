@@ -6,9 +6,11 @@ import {
   attention,
   consoleRoleNotice,
   installedPlugins,
+  PEERS_URL,
   pluginName,
   serverColumns,
   SETTINGS_URL,
+  settingsNote,
   stateText,
   type Attention,
   type InstalledPlugin,
@@ -150,7 +152,7 @@ export function Board() {
 
   return (
     <main className="board">
-      <Header />
+      <Header version={s.multihelm} />
       {status.load.state !== 'ok' && (
         <p className="banner tone-danger">
           Lost the connection to this server; what follows may be out of date.
@@ -208,11 +210,54 @@ export function Board() {
   )
 }
 
-function Header() {
+function Header({ version }: { version?: string | undefined }) {
   return (
     <header>
-      <h1>Multihelm</h1>
+      <h1>Multihelm{version && <span className="version"> {version}</span>}</h1>
     </header>
+  )
+}
+
+async function pair(url: string): Promise<void> {
+  const res = await fetch(PEERS_URL, {
+    method: 'POST',
+    credentials: 'same-origin',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ url })
+  })
+  if (!res.ok) {
+    const body = (await res.json().catch(() => ({}))) as { error?: unknown }
+    throw new Error(typeof body.error === 'string' ? body.error : `HTTP ${String(res.status)}`)
+  }
+}
+
+function PairButton({ name, url }: { name: string; url: string }) {
+  const [pairing, setPairing] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const start = async (): Promise<void> => {
+    setPairing(true)
+    setError(null)
+    try {
+      await pair(url)
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e))
+      setPairing(false)
+    }
+  }
+  return (
+    <>
+      <button
+        type="button"
+        className="button"
+        disabled={pairing}
+        onClick={() => {
+          void start()
+        }}
+      >
+        {pairing ? 'Pairing…' : `Pair with ${name}`}
+      </button>
+      {error && <p className="banner tone-danger">{error}</p>}
+    </>
   )
 }
 
@@ -267,14 +312,16 @@ function ServerCard({ column, now, masterPlugins, installed, plan, edit }: Serve
         </div>
       )}
       <div className="server-actions">
-        {plan ? (
+        {plan && (
           <button type="button" className="button" onClick={edit}>
             Settings
           </button>
-        ) : (
-          !column.here && (
-            <p className="muted">Its settings are made on that server: its Multihelm is older.</p>
-          )
+        )}
+        {!column.here && (!plan || column.oneWay) && (
+          <p className="muted">{settingsNote(column, plan !== undefined)}</p>
+        )}
+        {column.oneWay && column.pairUrl !== undefined && (
+          <PairButton name={column.name} url={column.pairUrl} />
         )}
       </div>
     </article>
