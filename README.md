@@ -181,6 +181,26 @@ servers (see _When the master is gone_): then it stops them. While another serve
 list turned on by hand here is turned off again within a minute. Switching uses the same admin access as
 taking the vessel settings over (see below), on the master too.
 
+## Plugins on chosen servers
+
+Some plugins should run once on the boat, but not necessarily on the master:
+a database such as signalk-questdb on the server with the most room, for
+example. Under **Run on chosen servers** in the console, add the plugin and
+tap the servers in the order they should run it. It runs on the first of
+them that is there and is stopped on all others, switched the same way as
+the plugins that run on the master only. When that server has not been
+heard from for about three minutes, counted from a server's own start too,
+the next one on the list starts it; once the first is back for two minutes,
+it takes it over again. The lists are the same on every server, with no
+master, and a server not on a plugin's list stops it.
+
+While the network is split, the servers on either side may both run such a
+plugin. That is harmless for a database, each keeping its own; a plugin that
+sends to a bus all servers share, such as an autopilot provider, belongs on
+the master only. A plugin on that list cannot be placed as well. Put every
+server on the list in pairing with the others, so each sees when one is
+gone.
+
 ## Plugins with the same settings on every server
 
 Some plugins keep everything in their plugin settings, such as

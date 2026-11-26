@@ -6,6 +6,7 @@ import {
   attention,
   consoleRoleNotice,
   installedPlugins,
+  placedOn,
   pluginName,
   serverColumns,
   SETTINGS_URL,
@@ -18,6 +19,7 @@ import {
 import { Apps } from './Apps.js'
 import { errorText } from './http.js'
 import { AddServer, forget, pair, unpair } from './Pairing.js'
+import { PlacementCard, PlacementEditor } from './Placement.js'
 import { PluginListCard, PluginListEditor, type ListName } from './PluginLists.js'
 import { ServerSettings } from './ServerSettings.js'
 
@@ -107,7 +109,7 @@ export function Board() {
   const plugins = usePolled(PLUGINS_URL, PLUGINS_POLL_MS, installedPlugins)
   const now = useNow()
   const [editing, setEditing] = useState<ServerColumn | null>(null)
-  const [editingList, setEditingList] = useState<ListName | null>(null)
+  const [editingList, setEditingList] = useState<ListName | 'placement' | null>(null)
 
   if (!status.value) {
     return (
@@ -152,6 +154,8 @@ export function Board() {
     })
   }
   const columns = serverColumns(s)
+  const placement = s.placement ?? {}
+  const placed = placedOn(placement, columns)
   const masterKnown = columns.some((c) => c.master)
 
   return (
@@ -169,7 +173,10 @@ export function Board() {
             key={column.id || column.name}
             column={column}
             now={now}
-            masterPlugins={column.master ? s.masterPlugins : []}
+            masterPlugins={[
+              ...(column.master ? s.masterPlugins : []),
+              ...(placed.get(column.id) ?? [])
+            ]}
             installed={installed}
             plan={s.plan?.[column.id]}
             edit={() => {
@@ -201,11 +208,32 @@ export function Board() {
             setEditingList('shared-plugins')
           }}
         />
+        {s.placement !== undefined && (
+          <PlacementCard
+            placement={placement}
+            columns={columns}
+            installed={installed}
+            edit={() => {
+              setEditingList('placement')
+            }}
+          />
+        )}
         <AddServer status={s} />
         <BoatCard title="Kept in step" empty="Nothing registered." items={s.datasets} />
         <Apps />
       </section>
-      {editingList && (
+      {editingList === 'placement' && (
+        <PlacementEditor
+          placement={placement}
+          masterPlugins={s.masterPlugins}
+          columns={columns}
+          installed={installed}
+          close={() => {
+            setEditingList(null)
+          }}
+        />
+      )}
+      {editingList !== null && editingList !== 'placement' && (
         <PluginListEditor
           key={editingList}
           name={editingList}

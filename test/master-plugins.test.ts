@@ -157,7 +157,7 @@ describe('switching the plugins that run on the master only', () => {
 
   function switcher(
     name: string,
-    wanted: boolean | null | (() => boolean | null),
+    wanted: boolean | null | ((id: string) => boolean | null),
     ids: string[] | (() => string[]),
     runningChanged?: () => void,
     runningFile?: string
@@ -224,6 +224,19 @@ describe('switching the plugins that run on the master only', () => {
     await other
     await switching
     expect(plugins.get('autopilot')).toEqual({ enabled: false, configuration: { device: 'b' } })
+  })
+
+  it('switches each plugin as it wants, for plugins placed on chosen servers', async () => {
+    plugins.set('questdb', { enabled: false })
+    plugins.set('grafana', { enabled: true })
+    plugins.set('rules', { enabled: true })
+    const wanted = (id: string): boolean | null =>
+      id === 'questdb' ? true : id === 'grafana' ? false : null
+    await switcher('placed', wanted, ['grafana', 'questdb', 'rules']).applyOnce()
+    expect(posts.map((p) => [p.id, (p.body as { enabled: boolean }).enabled])).toEqual([
+      ['grafana', false],
+      ['questdb', true]
+    ])
   })
 
   it('skips a plugin not installed here', async () => {
