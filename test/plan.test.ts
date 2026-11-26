@@ -27,8 +27,13 @@ let dir: string
 beforeEach(() => {
   dir = fs.mkdtempSync(path.join(os.tmpdir(), 'multihelm-plan-'))
 })
-afterEach(() => {
-  fs.rmSync(dir, { recursive: true, force: true })
+// A round still running when a test stopped the plugin saves its state when it ends; on a slow
+// disk (Windows) that is after the test, so the data dir is removed only once it is done.
+const ROUND_SETTLE_MS = 300
+
+afterEach(async () => {
+  await new Promise((resolve) => setTimeout(resolve, ROUND_SETTLE_MS))
+  fs.rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 })
 })
 
 describe('the boat plan', () => {
