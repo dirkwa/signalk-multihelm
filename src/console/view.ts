@@ -7,6 +7,7 @@ import {
   type Notice
 } from '../configpanel/view.js'
 import { ConfigSchema } from '../config.js'
+import type { Placement } from '../placement.js'
 import type { PlanSettings } from '../plan.js'
 import type { Status } from '../status.js'
 
@@ -169,6 +170,31 @@ export type SavedLists = Partial<Record<'master-plugins' | 'shared-plugins', Sav
  */
 export function listShown(fromStatus: string[], statusRead: number, saved?: SavedList): string[] {
   return saved !== undefined && statusRead < saved.read ? saved.ids : fromStatus
+}
+
+/**
+ * Where each placed plugin runs now, as this server sees it: on the first
+ * server of its list that is online. Servers this one does not know are
+ * passed over.
+ */
+export function placedOn(placement: Placement, columns: ServerColumn[]): Map<string, string[]> {
+  const on = new Map<string, string[]>()
+  for (const [id, order] of Object.entries(placement)) {
+    const host = order.find((server) =>
+      columns.some((c) => c.id === server && c.state === 'online')
+    )
+    if (host !== undefined) {
+      on.set(host, [...(on.get(host) ?? []), id])
+    }
+  }
+  return on
+}
+
+/** A placement's servers by name, in order. */
+export function orderText(order: readonly string[], columns: ServerColumn[]): string {
+  return order
+    .map((id) => columns.find((c) => c.id === id)?.name ?? `a server not seen (${id.slice(0, 8)})`)
+    .join(', then ')
 }
 
 export function pluginName(id: string, installed: InstalledPlugin[]): string {

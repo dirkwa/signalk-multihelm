@@ -22,6 +22,7 @@ import { parsePluginIds, type PluginList } from './master-plugins.js'
 import { MASTER_ROUTE, type MasterProxy } from './master-proxy.js'
 import type { Multihelm } from './multihelm.js'
 import type { HelloFrom } from './peer-client.js'
+import { parsePlacement, type PluginPlacement } from './placement.js'
 import { isServerPlan, type PlanControl } from './plan.js'
 import type { SharedPluginConfig } from './shared-config.js'
 import { SHARED_DATA_ROUTE, type DataSharer } from './shared-data.js'
@@ -85,7 +86,8 @@ export function registerRoutes(
   sharedPlugins: () => { list: PluginList; config: SharedPluginConfig } | null = () => null,
   dataSharer: () => DataSharer | null = () => null,
   apps: () => { local: LocalApps; overview: AppsOverview } | null = () => null,
-  boatPlan: () => PlanControl | null = () => null
+  boatPlan: () => PlanControl | null = () => null,
+  placement: () => PluginPlacement | null = () => null
 ): void {
   const scoped = (router as RouterWithAccess).access
   const available = typeof scoped === 'function'
@@ -229,7 +231,8 @@ export function registerRoutes(
       masterPlugins: masterPlugins()?.ids() ?? [],
       sharedPlugins: sharedPlugins()?.list.ids() ?? [],
       controlAccess: mh ? controlAccess() : null,
-      plan: mh ? (boatPlan()?.plan.servers() ?? {}) : {}
+      plan: mh ? (boatPlan()?.plan.servers() ?? {}) : {},
+      placement: mh ? (placement()?.get() ?? {}) : {}
     }
     res.json(status)
   })
@@ -299,6 +302,31 @@ export function registerRoutes(
   putPluginList('/shared-plugins', () => {
     const shared = sharedPlugins()
     return shared ? { list: shared.list, added: (ids) => shared.config.seed(ids) } : null
+  })
+
+  router.put('/placement', async (req: Request, res: Response) => {
+    const target = placement()
+    if (!target) {
+      res.status(503).json({ error: 'Multihelm is not running' })
+      return
+    }
+    const wanted = parsePlacement((req.body as { plugins?: unknown } | undefined)?.plugins)
+    if (!wanted) {
+      res.status(400).json({ error: 'plugins must map plugin ids to lists of server ids' })
+      return
+    }
+    const onMaster = masterPlugins()?.ids() ?? []
+    const both = Object.keys(wanted).filter((id) => onMaster.includes(id))
+    if (both.length > 0) {
+      res.status(400).json({ error: `${both.join(', ')} already run on the master only` })
+      return
+    }
+    try {
+      await target.set(wanted)
+      res.json({ plugins: target.get() })
+    } catch (error) {
+      res.status(500).json({ error: errorText(error) })
+    }
   })
 
   router.put(
