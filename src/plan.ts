@@ -14,6 +14,7 @@ import { Type, type Static } from 'typebox'
 import { Value } from 'typebox/value'
 
 import type { DatasetDefinition, DatasetEntry, IncomingEntry } from './api.js'
+import type { BoatMaster } from './boat-master.js'
 import { ConfigSchema } from './config.js'
 
 export const PLAN_DATASET = 'signalk-multihelm/plan'
@@ -100,6 +101,8 @@ export interface PlanControl {
   plan: BoatPlan
   /** Applies settings planned for this server, from the console here. */
   applyOwn: (settings: PlanSettings) => void
+  /** The boat's choice of master. */
+  master: BoatMaster
 }
 
 export class BoatPlan {

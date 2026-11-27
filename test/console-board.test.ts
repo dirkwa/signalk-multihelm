@@ -83,6 +83,25 @@ describe('the console board', () => {
     expect(columns[1]?.versions).toBe('Signal K 2.33.0 · Multihelm 0.9.1')
   })
 
+  it("knows which servers follow the boat's choice of master, and the one it names", () => {
+    const columns = serverColumns(
+      status({
+        peers: [port, stbd],
+        master: port,
+        masterChoice: { serverId: 's', term: 3 },
+        followsChoice: ['own', 's'],
+        pairedBy: [{ id: 'b', name: 'backup', lastSeen: now, online: true }]
+      })
+    )
+    expect(columns.map((c) => [c.name, c.chosen, c.choosable])).toEqual([
+      ['salon', false, true],
+      ['flybridge-port', false, false],
+      ['flybridge-stbd', true, true],
+      ['backup', false, true]
+    ])
+    expect(serverColumns(status()).map((c) => c.choosable)).toEqual([false])
+  })
+
   it('names a peer that has not answered yet as the network does, and keeps its address', () => {
     const waiting: PeerInfo = {
       id: '',

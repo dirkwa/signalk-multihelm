@@ -120,6 +120,8 @@ describe('the console with placed plugins', () => {
     name,
     here: false,
     master: false,
+    chosen: false,
+    choosable: false,
     state,
     versions: '',
     oneWay: false

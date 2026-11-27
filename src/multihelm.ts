@@ -98,6 +98,8 @@ export interface MultihelmHost {
   serverName: () => string
   /** The user set this server to be the boat's master. */
   isMaster: () => boolean
+  /** The term of the boat's choice of master that `isMaster` follows; 0 or missing: none. */
+  masterTerm?: () => number
   /** Its place among the servers that take over as master; 0: never. */
   standby?: () => number
   /** Plugins that run on the master only still run here, or their stop has not been confirmed. */
@@ -347,6 +349,7 @@ export class Multihelm {
             return
           }
           this.answered(url, hello, asked)
+          this.newerChoice(hello.masterTerm)
           if (hello.master) {
             this.masterSeen.set(url, Date.now())
           } else {
@@ -427,6 +430,14 @@ export class Multihelm {
     return [...this.datasets.keys()].sort()
   }
 
+  /** The paired peers whose last `hello` listed the dataset `id`, by server id. */
+  peersWithDataset(id: string): string[] {
+    return this.peers
+      .filter((p) => p.state === 'paired' && p.id !== '')
+      .filter((p) => this.answers.get(p.url)?.hello.datasets.includes(id) === true)
+      .map((p) => p.id)
+  }
+
   /** A round a few seconds from now, so a burst of changes makes one round. */
   private changedSoon(): void {
     if (!this.started || this.soon) {
@@ -463,11 +474,22 @@ export class Multihelm {
 
   // --- master role ----------------------------------------------------
 
-  /** The servers set to be the master that count now, this one included, smallest id first. */
+  /**
+   * The servers set to be the master that count now, this one included,
+   * smallest id first. A server whose setting follows an older choice of
+   * master than another server's has not taken the newer one over yet, and
+   * does not count; one that does not say which it follows always counts.
+   */
   private masterCandidates(): { id: string; peer: Peer | null }[] {
     const now = Date.now()
+    const ownTerm = this.host.masterTerm?.() ?? 0
+    const newest = Math.max(
+      ownTerm,
+      ...this.seenPeers(now).map(({ hello }) => hello.masterTerm ?? 0)
+    )
+    const current = (term: number | undefined): boolean => term === undefined || term >= newest
     const candidates: { id: string; peer: Peer | null }[] = []
-    if (this.host.isMaster()) {
+    if (this.host.isMaster() && current(ownTerm)) {
       candidates.push({ id: this.serverId, peer: null })
     }
     for (const peer of this.peers) {
@@ -476,7 +498,8 @@ export class Multihelm {
         peer.state === 'paired' &&
         peer.id !== '' &&
         seen !== undefined &&
-        now - seen <= MASTER_STALE_MS
+        now - seen <= MASTER_STALE_MS &&
+        current(this.answers.get(peer.url)?.hello.masterTerm)
       ) {
         candidates.push({ id: peer.id, peer })
       }
@@ -793,6 +816,7 @@ export class Multihelm {
       protocol: PROTOCOL,
       datasets: this.datasetIds(),
       master: this.host.isMaster(),
+      masterTerm: this.host.masterTerm?.() ?? 0,
       ...this.standing(),
       ...(peer ? { seesStandby: peer.standby ?? 0 } : {}),
       ...this.versions(),
@@ -831,7 +855,20 @@ export class Multihelm {
       name: this.host.serverName(),
       master: this.host.isMaster(),
       acting: this.acting(),
+      masterTerm: this.host.masterTerm?.() ?? 0,
       ...this.versions()
+    }
+  }
+
+  /** The term this server follows changed: the peers hear at once, and fetch the choice if it is newer. */
+  masterTermChanged(): void {
+    void this.checkMasters()
+  }
+
+  /** A peer follows a newer choice of master than this server: a round fetches it now. */
+  private newerChoice(term: number | undefined): void {
+    if (term !== undefined && term > (this.host.masterTerm?.() ?? 0)) {
+      this.changedSoon()
     }
   }
 
@@ -893,6 +930,9 @@ export class Multihelm {
     }
     // A server that became or stopped being the master says so at once, so the role moves in seconds.
     const peer = this.peers.find((p) => p.state === 'paired' && p.id === from.serverId)
+    if (peer) {
+      this.newerChoice(from.masterTerm)
+    }
     const answer = peer && this.answers.get(peer.url)?.hello
     if (
       peer &&

@@ -19,7 +19,7 @@ import {
   type ServerColumn
 } from './view.js'
 import { Apps } from './Apps.js'
-import { errorText } from './http.js'
+import { BASE, errorText, send } from './http.js'
 import { AddServer, forget, pair, unpair } from './Pairing.js'
 import { PlacementCard, PlacementEditor } from './Placement.js'
 import { PluginListCard, PluginListEditor, type ListName } from './PluginLists.js'
@@ -196,6 +196,10 @@ export function Board() {
             edit={() => {
               setEditing(column)
             }}
+            choose={async () => {
+              await send(`${BASE}/master`, 'PUT', { serverId: column.id })
+              status.reload()
+            }}
           />
         ))}
       </section>
@@ -281,7 +285,7 @@ export function Board() {
       )}
       <p className="footer">
         <a className="button" href={SETTINGS_URL}>
-          Master setting of this server
+          Plugin settings of this server
         </a>
       </p>
     </main>
@@ -362,9 +366,19 @@ interface ServerCardProps {
   installed: InstalledPlugin[]
   plan: ServerPlan | undefined
   edit: () => void
+  /** Makes this server the boat's master. */
+  choose: () => Promise<void>
 }
 
-function ServerCard({ column, now, masterPlugins, installed, plan, edit }: ServerCardProps) {
+function ServerCard({
+  column,
+  now,
+  masterPlugins,
+  installed,
+  plan,
+  edit,
+  choose
+}: ServerCardProps) {
   return (
     <article className={`server state-${column.state}${column.here ? ' here' : ''}`}>
       <div className="server-head">
@@ -377,6 +391,9 @@ function ServerCard({ column, now, masterPlugins, installed, plan, edit }: Serve
       {column.versions !== '' && <p className="server-versions">{column.versions}</p>}
       {column.oneWay && (
         <p className="server-note">Pairs with this server; this server does not pair with it.</p>
+      )}
+      {column.chosen && !column.master && (
+        <p className="server-note">Chosen to be the master; it takes over within a minute.</p>
       )}
       {masterPlugins.length > 0 && (
         <div className="roles">
@@ -393,6 +410,20 @@ function ServerCard({ column, now, masterPlugins, installed, plan, edit }: Serve
           <button type="button" className="button" onClick={edit}>
             Settings
           </button>
+        )}
+        {!column.master && !column.chosen && column.choosable && (
+          <ActionButton
+            label="Make master"
+            busyLabel="Making master…"
+            confirm={`Make ${column.name} the boat's master? The plugins that run on the master only move there.`}
+            action={choose}
+          />
+        )}
+        {!column.master && !column.choosable && column.state === 'online' && (
+          <p className="muted">
+            Its Multihelm is too old to be made the master from here; update it, or set it in its
+            own plugin settings.
+          </p>
         )}
         {!column.here && (!plan || column.oneWay) && (
           <p className="muted">{settingsNote(column, plan !== undefined)}</p>

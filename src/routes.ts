@@ -23,6 +23,7 @@ import { MASTER_ROUTE, type MasterProxy } from './master-proxy.js'
 import type { Multihelm } from './multihelm.js'
 import type { HelloFrom } from './peer-client.js'
 import { parsePlacement, type PluginPlacement } from './placement.js'
+import { MASTER_DATASET } from './boat-master.js'
 import { isServerPlan, type PlanControl } from './plan.js'
 import type { SharedPluginConfig } from './shared-config.js'
 import { SHARED_DATA_ROUTE, type DataSharer } from './shared-data.js'
@@ -60,11 +61,13 @@ function helloFrom(req: Request): HelloFrom | null {
   const multihelm = queryString(req, 'multihelm')
   const master = queryString(req, 'master')
   const acting = queryString(req, 'acting')
+  const masterTerm = queryString(req, 'masterTerm')
   return {
     serverId,
     name,
     ...(master === '1' || master === '0' ? { master: master === '1' } : {}),
     ...(acting === '1' || acting === '0' ? { acting: acting === '1' } : {}),
+    ...(/^\d{1,9}$/.test(masterTerm) ? { masterTerm: Number(masterTerm) } : {}),
     ...(VERSION.test(signalk) ? { signalk } : {}),
     ...(VERSION.test(multihelm) ? { multihelm } : {})
   }
@@ -232,7 +235,9 @@ export function registerRoutes(
       sharedPlugins: sharedPlugins()?.list.ids() ?? [],
       controlAccess: mh ? controlAccess() : null,
       plan: mh ? (boatPlan()?.plan.servers() ?? {}) : {},
-      placement: mh ? (placement()?.get() ?? {}) : {}
+      placement: mh ? (placement()?.get() ?? {}) : {},
+      masterChoice: mh ? (boatPlan()?.master.choice() ?? null) : null,
+      followsChoice: mh ? [mh.serverId, ...mh.peersWithDataset(MASTER_DATASET)] : []
     }
     res.json(status)
   })
@@ -355,6 +360,28 @@ export function registerRoutes(
         control.applyOwn(plan.settings)
       }
       res.json(plan)
+    })
+  )
+
+  router.put(
+    '/master',
+    running(async (mh, req, res) => {
+      const control = boatPlan()
+      if (!control) {
+        res.status(503).json({ error: 'Multihelm is not running' })
+        return
+      }
+      const serverId = (req.body as { serverId?: unknown } | undefined)?.serverId
+      const known =
+        serverId === '' ||
+        serverId === mh.serverId ||
+        mh.peerInfo().some((p) => p.state === 'paired' && p.id === serverId) ||
+        mh.pairedByInfo().some((s) => s.id === serverId)
+      if (typeof serverId !== 'string' || !known) {
+        res.status(400).json({ error: 'not a server of this boat' })
+        return
+      }
+      res.json(await control.master.choose(serverId))
     })
   )
 

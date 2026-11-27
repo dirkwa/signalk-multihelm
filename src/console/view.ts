@@ -19,6 +19,10 @@ export interface ServerColumn {
   /** The server this console is served by. */
   here: boolean
   master: boolean
+  /** The boat's choice of master names it; it may not have taken over yet. */
+  chosen: boolean
+  /** It follows the boat's choice of master, so the console can make it the master. */
+  choosable: boolean
   state: ServerState
   versions: string
   /** The Multihelm version it runs, when it says. */
@@ -47,11 +51,15 @@ const OWN_ACCESS_URL = '/admin/#/security/access/requests'
 
 /** This server first, then the servers it pairs with, then those that only pair with it. */
 export function serverColumns(status: Status): ServerColumn[] {
+  const chosen = status.masterChoice?.serverId ?? null
+  const follows = new Set(status.followsChoice ?? [])
   const here: ServerColumn = {
     id: status.serverId ?? '',
     name: status.name,
     here: true,
     master: status.role === 'master',
+    chosen: chosen !== null && chosen === status.serverId,
+    choosable: status.followsChoice !== undefined,
     state: 'online',
     versions: versionText(status),
     oneWay: false
@@ -61,6 +69,8 @@ export function serverColumns(status: Status): ServerColumn[] {
     name: peerName(peer, status.discovered),
     here: false,
     master: status.master !== null && status.master.id === peer.id,
+    chosen: chosen === peer.id,
+    choosable: follows.has(peer.id),
     state: peer.state === 'paired' ? (peer.online === true ? 'online' : 'offline') : peer.state,
     versions: versionText(peer),
     url: peer.url,
@@ -76,6 +86,9 @@ export function serverColumns(status: Status): ServerColumn[] {
       name: server.name,
       here: false,
       master: false,
+      chosen: chosen === server.id,
+      // It takes the choice over from this server, as it pairs with it, if its Multihelm knows it.
+      choosable: status.followsChoice !== undefined,
       state: server.online ? 'online' : 'offline',
       versions: versionText(server),
       lastSeen: server.lastSeen,

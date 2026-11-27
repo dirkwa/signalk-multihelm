@@ -25,7 +25,8 @@ sets by hand on one server (see `README.md`).
   server by that no known CA vouches for; peers keep it as `ca`.
 - `routes.ts` — readonly `hello`/`manifest`/`file`/`shared-data`/`installed`
   and `master/*` via `router.access`; admin `status`, `peers`, `paired-by`,
-  `run`, `master-plugins`, `shared-plugins`, `apps`, `apps/hidden`. `hello`
+  `run`, `master-plugins`, `shared-plugins`, `apps`, `apps/hidden`, `plan/<id>`,
+  `master`. `hello`
   notes the server asking, from its query.
 - `master-proxy.ts` — `MasterProxy`: on a member, serves the master's GET
   answers under the prefixes plugins registered, with the pairing token.
@@ -115,6 +116,12 @@ sets by hand on one server (see `README.md`).
   `savePluginOptions` and a restart of itself; `onStart` decides whether the
   plugin settings or the plan wins, from `applied.json`, the settings it
   last applied or published.
+- `boat-master.ts` — `BoatMaster`: the `signalk-multihelm/master` dataset,
+  one meta-only entry `master` (`{ serverId, term }`, `''` for none), the
+  boat's choice of master. Each server applies it to its own `master`
+  setting (`masterOnStart`, and on every change), from which the election
+  reads as before; a `master` changed in the plugin settings is published as
+  the next term. `applied.json` holds the setting and the term it follows.
 - `console/` — the console web app Signal K serves from `public/`
   (`vite.console.config.ts`, built after the panel, which empties
   `public/`): every server side by side, read from `status`. It bundles its
@@ -122,7 +129,8 @@ sets by hand on one server (see `README.md`).
   without a browser. Pairing (`Pairing.tsx`), the plugin lists
   (`PluginLists.tsx`) and the apps overview (`Apps.tsx`) live here, editors
   open in a modal `Sheet`. **Settings** on a server's card writes that server's
-  plan entry through `PUT plan/<id>`.
+  plan entry through `PUT plan/<id>`; **Make master** chooses that server
+  through `PUT master`.
 
 ## Contracts other software depends on
 
@@ -141,7 +149,8 @@ sets by hand on one server (see `README.md`).
   which older peers ignore.
 - **The master** is the server set to be it with the smallest server id,
   among this one and the paired peers whose `hello` said `master: true`
-  within `MASTER_STALE_MS`. While none has said so within `TAKEOVER_MS`,
+  within `MASTER_STALE_MS`, leaving out those whose `masterTerm` is below
+  the highest any of them said (one that says none counts). While none has said so within `TAKEOVER_MS`,
   it is the server with the lowest `standby` place. Once any server may take
   over, a server counts a master only while it sees most of the paired
   servers (a tie goes to the side with the one set by hand), and it acts as

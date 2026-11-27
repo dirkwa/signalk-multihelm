@@ -115,7 +115,8 @@ async function listen(
 async function station(
   name: string,
   master: () => boolean = () => false,
-  tls?: https.ServerOptions
+  tls?: https.ServerOptions,
+  host: Partial<MultihelmHost> = {}
 ): Promise<Station> {
   const dir = path.join(root, name, 'folder')
   fs.mkdirSync(dir, { recursive: true })
@@ -123,7 +124,8 @@ async function station(
     ...quiet(),
     serverName: () => name,
     isMaster: master,
-    versions: () => ({ signalk: '2.37.0', multihelm: `1.0.0-${name}` })
+    versions: () => ({ signalk: '2.37.0', multihelm: `1.0.0-${name}` }),
+    ...host
   })
   const dataset = new FolderDataset(dir)
   const handle = mh.registerDataset(dataset)
@@ -372,6 +374,64 @@ describe('the master role', () => {
     await vi.waitFor(() => {
       expect(port.mh.master()).toMatchObject({ name: 'role-now-salon' })
     })
+  })
+
+  it('counts no server whose setting follows an older choice of master', async () => {
+    const terms = new Map([
+      ['role-t-x', 1],
+      ['role-t-y', 1]
+    ])
+    const make = async (name: string): Promise<Station> => {
+      const s = await station(name, () => true, undefined, {
+        masterTerm: () => terms.get(name) ?? 0
+      })
+      stations.push(s)
+      return s
+    }
+    const x = await make('role-t-x')
+    const y = await make('role-t-y')
+    await x.mh.pair(y.url)
+    await y.mh.pair(x.url)
+    await x.mh.checkMasters()
+    await y.mh.checkMasters()
+    const [smaller, larger] = x.mh.serverId < y.mh.serverId ? [x, y] : [y, x]
+    expect(smaller.mh.role()).toBe('master')
+    expect(larger.mh.masterConflict()).toBe(true)
+
+    // The larger was made the master since; the smaller has not taken that over yet.
+    terms.set(larger === x ? 'role-t-x' : 'role-t-y', 2)
+    await smaller.mh.checkMasters()
+    expect(smaller.mh.role()).toBe('member')
+    expect(smaller.mh.masterConflict()).toBe(false)
+    await larger.mh.checkMasters()
+    expect(larger.mh.role()).toBe('master')
+    expect(larger.mh.masterConflict()).toBe(false)
+    // The larger told the smaller it acts now, when it asked for its hello.
+    await vi.waitFor(() => {
+      expect(smaller.mh.master()?.id).toBe(larger.mh.serverId)
+    })
+  })
+
+  it('fetches at once what a peer that follows a newer choice of master offers', async () => {
+    const behind = await station('role-n-behind', () => false, undefined, { masterTerm: () => 0 })
+    const ahead = await station('role-n-ahead', () => false, undefined, { masterTerm: () => 3 })
+    stations.push(behind, ahead)
+    await behind.mh.pair(ahead.url)
+    behind.mh.start()
+    try {
+      await behind.mh.runRound()
+      write(ahead.dataset.dir, 'later', 'note.txt', 'newer still')
+      await ahead.mh.runRound()
+      await behind.mh.checkMasters()
+      await vi.waitFor(
+        () => {
+          expect(read(behind.dataset.dir, 'later', 'note.txt')).toBe('newer still')
+        },
+        { timeout: 8_000 }
+      )
+    } finally {
+      behind.mh.stop()
+    }
   })
 
   it('tells status listeners when a conflict ends, though the role stays', async () => {
