@@ -67,7 +67,9 @@ export function roleNotice(status: Status, now: number): Notice {
 }
 
 function sameServer(server: DiscoveredServer, peer: PeerInfo): boolean {
-  return server.url === peer.url || server.name.toLowerCase() === peer.name.toLowerCase()
+  return (
+    server.addresses.includes(peer.url) || server.name.toLowerCase() === peer.name.toLowerCase()
+  )
 }
 
 /** The servers found on the network that this one is not paired with. */
@@ -80,7 +82,7 @@ export function peerName(peer: PeerInfo, discovered: DiscoveredServer[]): string
   if (peer.id !== '') {
     return peer.name
   }
-  return discovered.find((s) => s.url === peer.url)?.name ?? peer.name
+  return discovered.find((s) => s.addresses.includes(peer.url))?.name ?? peer.name
 }
 
 /** Approves an access request on the server the admin UI runs on. */

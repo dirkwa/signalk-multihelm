@@ -18,6 +18,7 @@ import tls from 'node:tls'
 
 export const ROUTE_PREFIX = '/plugins/signalk-multihelm'
 const REQUEST_TIMEOUT_MS = 30_000
+const ANSWER_TIMEOUT_MS = 3_000
 
 /**
  * What Node calls a chain whose issuer it does not trust, the one failure a
@@ -194,6 +195,34 @@ async function getJson(url: string, token?: string, ca?: string): Promise<unknow
     throw new PeerHttpError(res.status, `HTTP ${String(res.status)} from ${url}`)
   }
   return JSON.parse(text) as unknown
+}
+
+/**
+ * Whether a server answers Signal K's public discovery route at `url`. Only
+ * that it answers counts, so nothing is read and its certificate is not
+ * checked; pairing checks it.
+ */
+export function answersAt(url: string): Promise<boolean> {
+  const target = new URL('/signalk', url)
+  const request = target.protocol === 'https:' ? https.request : http.request
+  return new Promise((resolve) => {
+    const req = request(
+      target,
+      {
+        timeout: ANSWER_TIMEOUT_MS,
+        ...(target.protocol === 'https:' ? { rejectUnauthorized: false } : {})
+      },
+      (res) => {
+        res.resume()
+        resolve(true)
+      }
+    )
+    req.on('timeout', () => req.destroy())
+    req.on('error', () => {
+      resolve(false)
+    })
+    req.end()
+  })
 }
 
 /** `host:port` or a URL, reduced to `http(s)://host:port`; null when it is neither. */
