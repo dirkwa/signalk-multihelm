@@ -583,17 +583,18 @@ export default function (app: ServerAPI): Plugin {
           app.error(msg)
         }
       })
-      const placement = new PluginPlacement(path.join(app.getDataDirPath(), 'placement'), () => {
+      const switchPlaced = (): void => {
+        const servers = [...new Set(Object.values(placement.get()).flat())]
+        upSince.update(servers, (server) => mh.lastSeen(server), MASTER_STALE_MS, Date.now())
         placedPlugins.apply()
+      }
+      const placement = new PluginPlacement(path.join(app.getDataDirPath(), 'placement'), () => {
+        switchPlaced()
         placementHandle.changed()
       })
       const placementHandle = mh.registerDataset(placement.dataset)
       pluginPlacement = placement
-      const placementTimer = setInterval(() => {
-        const servers = [...new Set(Object.values(placement.get()).flat())]
-        upSince.update(servers, (server) => mh.lastSeen(server), MASTER_STALE_MS, Date.now())
-        placedPlugins.apply()
-      }, MASTER_CHECK_INTERVAL_MS)
+      const placementTimer = setInterval(switchPlaced, MASTER_CHECK_INTERVAL_MS)
       const pluginsTimer = setInterval(() => {
         masterPlugins.apply()
       }, ROUND_INTERVAL_MS)
