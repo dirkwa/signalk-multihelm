@@ -12,7 +12,7 @@ permissions:
 
 jobs:
   test:
-    uses: SignalK/signalk-server/.github/workflows/plugin-ci.yml@f29892a666fbda5f3226ab34572bfc8b690ffe2e # master
+    uses: SignalK/signalk-server/.github/workflows/plugin-ci.yml@0e2440c1ac794acf87aa2233640f90b347e21a22 # master
     with:
       node-versions: '["24", "26"]'
       enable-signalk-integration: true
