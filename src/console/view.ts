@@ -1,6 +1,7 @@
 import {
   accessRequestsUrl,
   ago,
+  peerName,
   roleNotice,
   versionText,
   type Notice
@@ -24,6 +25,8 @@ export interface ServerColumn {
   lastSeen?: number
   /** Paired with this server, but this server is not paired with it. */
   oneWay: boolean
+  /** The address this server pairs with it at, for a server it pairs with. */
+  url?: string
   /** Where this server can pair with a one-way server, when it is announced on the network. */
   pairUrl?: string
 }
@@ -54,11 +57,12 @@ export function serverColumns(status: Status): ServerColumn[] {
   }
   const peers = status.peers.map((peer): ServerColumn => ({
     id: peer.id,
-    name: peer.name,
+    name: peerName(peer, status.discovered),
     here: false,
     master: status.master !== null && status.master.id === peer.id,
     state: peer.state === 'paired' ? (peer.online === true ? 'online' : 'offline') : peer.state,
     versions: versionText(peer),
+    url: peer.url,
     ...(peer.multihelm === undefined ? {} : { multihelm: peer.multihelm }),
     ...(peer.lastSeen === undefined ? {} : { lastSeen: peer.lastSeen }),
     oneWay: false
@@ -112,8 +116,6 @@ export function settingsNote(column: ServerColumn, planned = false): string {
     : `To change its settings here, update Multihelm on ${column.name} to ${PLAN_VERSION.join('.')} or later.`
 }
 
-export const PEERS_URL = '/plugins/signalk-multihelm/peers'
-
 /** From `/skServer/plugins`; entries without an id are left out. */
 export function installedPlugins(raw: unknown): InstalledPlugin[] {
   if (!Array.isArray(raw)) {
@@ -129,6 +131,44 @@ export function installedPlugins(raw: unknown): InstalledPlugin[] {
       name: typeof p.name === 'string' && p.name !== '' ? p.name : p.id,
       enabled: p.data?.enabled === true
     }))
+}
+
+export interface PluginChoice {
+  id: string
+  name: string
+  installed: boolean
+}
+
+/** The plugins a list can hold, by name: those installed here but Multihelm, then those listed but not installed. */
+export function pluginChoices(installed: InstalledPlugin[], listed: string[]): PluginChoice[] {
+  const here = installed
+    .filter((p) => p.id !== MULTIHELM_ID)
+    .map((p) => ({ id: p.id, name: p.name, installed: true }))
+    .sort((a, b) => a.name.localeCompare(b.name))
+  const missing = listed
+    .filter((id) => !installed.some((p) => p.id === id))
+    .sort()
+    .map((id) => ({ id, name: id, installed: false }))
+  return [...here, ...missing]
+}
+
+const MULTIHELM_ID = 'signalk-multihelm'
+
+/** A list saved from the console, and the status read made right after the save. */
+export interface SavedList {
+  ids: string[]
+  read: number
+}
+
+export type SavedLists = Partial<Record<'master-plugins' | 'shared-plugins', SavedList>>
+
+/**
+ * The list to show: the one saved here until a status read made after the
+ * save has come in; a failed read leaves it, and an older read cannot
+ * replace a later save, as only a newer read number does.
+ */
+export function listShown(fromStatus: string[], statusRead: number, saved?: SavedList): string[] {
+  return saved !== undefined && statusRead < saved.read ? saved.ids : fromStatus
 }
 
 export function pluginName(id: string, installed: InstalledPlugin[]): string {
@@ -171,8 +211,7 @@ export function consoleRoleNotice(status: Status, now: number): Attention {
   return unpaired
     ? {
         tone: 'warning',
-        text: "No master found: this server is not paired yet. Pair it with the boat's master in the settings.",
-        link: { href: SETTINGS_URL, text: 'Settings' }
+        text: "No master found: this server is not paired yet. Pair it with the boat's master under Pair with another server below."
       }
     : roleNotice(status, now)
 }
@@ -189,7 +228,7 @@ export function attention(status: Status, installed: InstalledPlugin[]): Attenti
   } else if (status.ownAccess?.state === 'denied') {
     items.push({
       tone: 'danger',
-      text: 'Admin access to this server was denied, so Multihelm cannot write here.',
+      text: 'Admin access to this server was denied, so Multihelm cannot write here. Save the master setting of this server to ask again.',
       link: { href: SETTINGS_URL, text: 'Settings' }
     })
   }
@@ -211,8 +250,7 @@ export function attention(status: Status, installed: InstalledPlugin[]): Attenti
     } else if (peer.state === 'needs-pairing') {
       items.push({
         tone: 'danger',
-        text: `${peer.name} needs to be paired again${peer.lastError ? `: ${peer.lastError}` : '.'}`,
-        link: { href: SETTINGS_URL, text: 'Settings' }
+        text: `${peer.name} needs to be paired again${peer.lastError ? `: ${peer.lastError}` : '.'} Tap Pair again on its card.`
       })
     }
   }
@@ -248,6 +286,11 @@ export const SWITCHES = [
 export function settingTitle(key: keyof PlanSettings): string {
   const { title } = ConfigSchema.properties[key] as { title?: unknown }
   return typeof title === 'string' ? title : key
+}
+
+export function settingHelp(key: keyof PlanSettings): string {
+  const { description } = ConfigSchema.properties[key] as { description?: unknown }
+  return typeof description === 'string' ? description : ''
 }
 
 /** Lines typed one per line, or separated by commas. */

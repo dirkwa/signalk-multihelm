@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 
 import type { ServerPlan } from '../plan.js'
 import type { Status } from '../status.js'
@@ -6,8 +6,9 @@ import {
   attention,
   consoleRoleNotice,
   installedPlugins,
-  PEERS_URL,
+  listShown,
   pluginName,
+  type SavedLists,
   serverColumns,
   SETTINGS_URL,
   settingsNote,
@@ -16,6 +17,10 @@ import {
   type InstalledPlugin,
   type ServerColumn
 } from './view.js'
+import { Apps } from './Apps.js'
+import { errorText } from './http.js'
+import { AddServer, forget, pair, unpair } from './Pairing.js'
+import { PluginListCard, PluginListEditor, type ListName } from './PluginLists.js'
 import { ServerSettings } from './ServerSettings.js'
 
 const STATUS_URL = '/plugins/signalk-multihelm/status'
@@ -42,6 +47,9 @@ class LoginNeeded extends Error {}
 function usePolled<T>(url: string, everyMs: number, parse: (raw: unknown) => T) {
   const [value, setValue] = useState<T | null>(null)
   const [load, setLoad] = useState<Load>({ state: 'loading' })
+  /** The number of the read the value came from; reads are numbered as they are made. */
+  const [readNo, setReadNo] = useState(0)
+  const reader = useRef<() => number>(() => 0)
   useEffect(() => {
     let stopped = false
     // A slow answer must not overwrite a later one that came first.
@@ -54,12 +62,13 @@ function usePolled<T>(url: string, everyMs: number, parse: (raw: unknown) => T) 
       applied = request
       return true
     }
-    const read = (): void => {
+    const read = (): number => {
       const request = ++issued
-      getJson(url).then(
+      void getJson(url).then(
         (raw) => {
           if (current(request)) {
             setValue(parse(raw))
+            setReadNo(request)
             setLoad({ state: 'ok' })
           }
         },
@@ -73,7 +82,9 @@ function usePolled<T>(url: string, everyMs: number, parse: (raw: unknown) => T) 
           }
         }
       )
+      return request
     }
+    reader.current = read
     read()
     const timer = setInterval(read, everyMs)
     return () => {
@@ -81,7 +92,9 @@ function usePolled<T>(url: string, everyMs: number, parse: (raw: unknown) => T) 
       clearInterval(timer)
     }
   }, [url, everyMs, parse])
-  return { value, load }
+  /** Reads at once, and returns the number of that read. */
+  const reload = useCallback(() => reader.current(), [])
+  return { value, load, readNo, reload }
 }
 
 const asStatus = (raw: unknown): Status => raw as Status
@@ -104,6 +117,9 @@ export function Board() {
   const plugins = usePolled(PLUGINS_URL, PLUGINS_POLL_MS, installedPlugins)
   const now = useNow()
   const [editing, setEditing] = useState<ServerColumn | null>(null)
+  const [editingList, setEditingList] = useState<ListName | null>(null)
+  // A list just saved stands until a status read made after the save has it.
+  const [savedLists, setSavedLists] = useState<SavedLists>({})
 
   if (!status.value) {
     return (
@@ -147,6 +163,8 @@ export function Board() {
           : "Cannot read this server's plugins just now; what is said about them may be out of date."
     })
   }
+  const masterPlugins = listShown(s.masterPlugins, status.readNo, savedLists['master-plugins'])
+  const sharedPlugins = listShown(s.sharedPlugins, status.readNo, savedLists['shared-plugins'])
   const columns = serverColumns(s)
   const masterKnown = columns.some((c) => c.master)
 
@@ -181,13 +199,41 @@ export function Board() {
         </p>
       )}
       <section className="boat" aria-label="The whole boat">
-        <BoatCard
-          title="Same settings on every server"
-          empty="No plugins chosen."
-          items={s.sharedPlugins.map((id) => pluginName(id, installed))}
+        <PluginListCard
+          name="master-plugins"
+          current={masterPlugins}
+          installed={installed}
+          edit={() => {
+            setEditingList('master-plugins')
+          }}
         />
+        <PluginListCard
+          name="shared-plugins"
+          current={sharedPlugins}
+          installed={installed}
+          edit={() => {
+            setEditingList('shared-plugins')
+          }}
+        />
+        <AddServer status={s} />
         <BoatCard title="Kept in step" empty="Nothing registered." items={s.datasets} />
+        <Apps />
       </section>
+      {editingList && (
+        <PluginListEditor
+          key={editingList}
+          name={editingList}
+          current={editingList === 'master-plugins' ? masterPlugins : sharedPlugins}
+          installed={installed}
+          saved={(name, ids) => {
+            const read = status.reload()
+            setSavedLists((lists) => ({ ...lists, [name]: { ids, read } }))
+          }}
+          close={() => {
+            setEditingList(null)
+          }}
+        />
+      )}
       {editing && s.plan?.[editing.id] && (
         <ServerSettings
           key={editing.id}
@@ -203,7 +249,7 @@ export function Board() {
       )}
       <p className="footer">
         <a className="button" href={SETTINGS_URL}>
-          Settings
+          Master setting of this server
         </a>
       </p>
     </main>
@@ -218,30 +264,29 @@ function Header({ version }: { version?: string | undefined }) {
   )
 }
 
-async function pair(url: string): Promise<void> {
-  const res = await fetch(PEERS_URL, {
-    method: 'POST',
-    credentials: 'same-origin',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ url })
-  })
-  if (!res.ok) {
-    const body = (await res.json().catch(() => ({}))) as { error?: unknown }
-    throw new Error(typeof body.error === 'string' ? body.error : `HTTP ${String(res.status)}`)
-  }
+interface ActionProps {
+  label: string
+  busyLabel: string
+  action: () => Promise<unknown>
+  /** Asked before acting, for what cannot be taken back with one tap. */
+  confirm?: string
 }
 
-function PairButton({ name, url }: { name: string; url: string }) {
-  const [pairing, setPairing] = useState(false)
+function ActionButton({ label, busyLabel, action, confirm }: ActionProps) {
+  const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const start = async (): Promise<void> => {
-    setPairing(true)
+    if (confirm !== undefined && !window.confirm(confirm)) {
+      return
+    }
+    setBusy(true)
     setError(null)
     try {
-      await pair(url)
+      await action()
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e))
-      setPairing(false)
+      setError(errorText(e))
+    } finally {
+      setBusy(false)
     }
   }
   return (
@@ -249,12 +294,12 @@ function PairButton({ name, url }: { name: string; url: string }) {
       <button
         type="button"
         className="button"
-        disabled={pairing}
+        disabled={busy}
         onClick={() => {
           void start()
         }}
       >
-        {pairing ? 'Pairing…' : `Pair with ${name}`}
+        {busy ? busyLabel : label}
       </button>
       {error && <p className="banner tone-danger">{error}</p>}
     </>
@@ -321,7 +366,34 @@ function ServerCard({ column, now, masterPlugins, installed, plan, edit }: Serve
           <p className="muted">{settingsNote(column, plan !== undefined)}</p>
         )}
         {column.oneWay && column.pairUrl !== undefined && (
-          <PairButton name={column.name} url={column.pairUrl} />
+          <ActionButton
+            label={`Pair with ${column.name}`}
+            busyLabel="Pairing…"
+            action={() => pair(column.pairUrl ?? '')}
+          />
+        )}
+        {column.state === 'needs-pairing' && column.url !== undefined && (
+          <ActionButton
+            label="Pair again"
+            busyLabel="Pairing…"
+            action={() => pair(column.url ?? '')}
+          />
+        )}
+        {column.oneWay && column.state === 'offline' && (
+          <ActionButton
+            label="Forget"
+            busyLabel="Forgetting…"
+            confirm={`Take ${column.name} off the board? It comes back once it asks this server again.`}
+            action={() => forget(column.id)}
+          />
+        )}
+        {!column.here && !column.oneWay && column.url !== undefined && (
+          <ActionButton
+            label="Unpair"
+            busyLabel="Unpairing…"
+            confirm={`Stop taking over what ${column.name} shares?`}
+            action={() => unpair(column.url ?? '')}
+          />
         )}
       </div>
     </article>

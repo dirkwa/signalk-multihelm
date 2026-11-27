@@ -57,7 +57,7 @@ export function roleNotice(status: Status, now: number): Notice {
   if (paired.length === 0) {
     return {
       tone: 'warning',
-      text: "No master found: this server is not paired yet. Pair it with the server set to be the boat's master below."
+      text: "No master found: this server is not paired yet. Pair it with the server set to be the boat's master in the Multihelm console."
     }
   }
   return {
@@ -139,18 +139,6 @@ export function connectionIds(raw: unknown): string[] {
     .map((p) => (typeof p === 'object' && p !== null ? (p as { id?: unknown }).id : undefined))
     .filter((id): id is string => typeof id === 'string' && id !== '')
     .sort((a, b) => a.localeCompare(b))
-}
-
-/** Paths typed one per line, or separated by commas. */
-export function pathsFromText(text: string): string[] {
-  return [
-    ...new Set(
-      text
-        .split(/[\n,]/)
-        .map((p) => p.trim())
-        .filter(Boolean)
-    )
-  ]
 }
 
 const PACKAGE_NAME = /^(?:@[a-z0-9~-][a-z0-9._~-]*\/)?[a-z0-9~-][a-z0-9._~-]*$/i

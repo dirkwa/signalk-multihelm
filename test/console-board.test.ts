@@ -5,7 +5,9 @@ import {
   attention,
   consoleRoleNotice,
   installedPlugins,
+  listShown,
   masterPluginProblems,
+  pluginChoices,
   serverColumns,
   settingsNote,
   stateText
@@ -77,6 +79,56 @@ describe('the console board', () => {
       ['backup', false, false, 'online', true]
     ])
     expect(columns[1]?.versions).toBe('Signal K 2.33.0 · Multihelm 0.9.1')
+  })
+
+  it('names a peer that has not answered yet as the network does, and keeps its address', () => {
+    const waiting: PeerInfo = {
+      id: '',
+      name: 'http://192.0.2.20',
+      url: 'http://192.0.2.20',
+      state: 'waiting-approval'
+    }
+    const [, column] = serverColumns(
+      status({
+        peers: [waiting],
+        discovered: [{ name: 'nav', url: 'http://192.0.2.20', lastSeen: now }]
+      })
+    )
+    expect([column?.name, column?.url]).toEqual(['nav', 'http://192.0.2.20'])
+  })
+
+  it('offers every installed plugin but Multihelm for a list, then those listed but not installed', () => {
+    expect(
+      pluginChoices(
+        [
+          { id: 'signalk-multihelm', name: 'Multihelm', enabled: true },
+          { id: 'zz', name: 'Autopilot', enabled: true },
+          { id: 'aa', name: 'Zigbee', enabled: false }
+        ],
+        ['gone', 'zz']
+      )
+    ).toEqual([
+      { id: 'zz', name: 'Autopilot', installed: true },
+      { id: 'aa', name: 'Zigbee', installed: true },
+      { id: 'gone', name: 'gone', installed: false }
+    ])
+  })
+
+  it('shows a list saved here until a status read made after the save has it', () => {
+    const saved = { ids: ['autopilot', 'rules'], read: 7 }
+    expect(listShown(['autopilot'], 6, saved)).toEqual(['autopilot', 'rules'])
+    // A failed read changes no read number, so the saved list stays.
+    expect(listShown(['autopilot'], 6, saved)).toEqual(['autopilot', 'rules'])
+    expect(listShown(['autopilot', 'rules'], 7, saved)).toEqual(['autopilot', 'rules'])
+    expect(listShown(['rules'], 9, saved)).toEqual(['rules'])
+    expect(listShown(['autopilot'], 9)).toEqual(['autopilot'])
+  })
+
+  it('keeps a later save of the same list against a read made before it', () => {
+    const first = { ids: ['a'], read: 3 }
+    const second = { ids: ['a', 'b'], read: 5 }
+    expect(listShown(['a'], 4, first)).toEqual(['a'])
+    expect(listShown(['a'], 4, second)).toEqual(['a', 'b'])
   })
 
   it("shows this server's own versions", () => {
@@ -195,15 +247,14 @@ describe('the console board', () => {
     expect(attention(status({ peers: [port], master: port }), [])).toEqual([])
   })
 
-  it('sends a server not paired yet to the settings, and keeps the other notices', () => {
+  it('sends a server not paired yet to pairing, and keeps the other notices', () => {
     expect(consoleRoleNotice(status(), now)).toEqual({
       tone: 'warning',
-      text: "No master found: this server is not paired yet. Pair it with the boat's master in the settings.",
-      link: { href: '/admin/#/serverConfiguration/plugins/signalk-multihelm', text: 'Settings' }
+      text: "No master found: this server is not paired yet. Pair it with the boat's master under Pair with another server below."
     })
     expect(
-      consoleRoleNotice(status({ peers: [{ ...port, state: 'waiting-approval' }] }), now).link?.text
-    ).toBe('Settings')
+      consoleRoleNotice(status({ peers: [{ ...port, state: 'waiting-approval' }] }), now).text
+    ).toMatch(/not paired yet/)
     expect(consoleRoleNotice(status({ peers: [port] }), now).text).toMatch(
       /none of the paired servers/
     )

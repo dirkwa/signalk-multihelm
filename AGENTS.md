@@ -95,10 +95,11 @@ sets by hand on one server (see `README.md`).
   them to peers at `installed`; `AppsOverview` reads every answering peer's
   and `compareApps` lists what is missing here, in another version, or off
   here, leaving out what the user set aside on this server
-  (`hidden-apps.json`). The panel installs through the App Store's route.
+  (`hidden-apps.json`). The console installs through the App Store's route.
 - `configpanel/` — the settings panel the admin UI shows in place of the
-  schema form (Module Federation, `vite.panel.config.ts`): pairing, peers,
-  the role, the settings. It uses the admin UI's React through
+  schema form (Module Federation, `vite.panel.config.ts`): the master
+  setting, Multihelm's own access request and a link to the console;
+  everything else is in the console. It uses the admin UI's React through
   `host-shim/`, never a copy of its own, and reaches the server modules by
   type imports only. `view.ts` holds what can be tested without a browser;
   `install-watch.ts` follows App Store installs through the server events.
@@ -112,7 +113,9 @@ sets by hand on one server (see `README.md`).
   (`vite.console.config.ts`, built after the panel, which empties
   `public/`): every server side by side, read from `status`. It bundles its
   own React, as it runs on its own page; `view.ts` holds what can be tested
-  without a browser. **Settings** on a server's card writes that server's
+  without a browser. Pairing (`Pairing.tsx`), the plugin lists
+  (`PluginLists.tsx`) and the apps overview (`Apps.tsx`) live here, editors
+  open in a modal `Sheet`. **Settings** on a server's card writes that server's
   plan entry through `PUT plan/<id>`.
 
 ## Contracts other software depends on
