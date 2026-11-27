@@ -192,7 +192,9 @@ the plugins that run on the master only. When that server has not been
 heard from for about three minutes, counted from a server's own start too,
 the next one on the list starts it; once the first is back for two minutes,
 it takes it over again. The lists are the same on every server, with no
-master, and a server not on a plugin's list stops it.
+master, and a server not on a plugin's list stops it. A plugin taken off
+**Run on chosen servers** is left as it is on every server, as one taken off
+the master-only list is.
 
 While the network is split, the servers on either side may both run such a
 plugin. That is harmless for a database, each keeping its own; a plugin that

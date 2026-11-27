@@ -8,7 +8,8 @@ import {
   pluginChoices,
   pluginName,
   type InstalledPlugin,
-  type ServerColumn
+  type ServerColumn,
+  unseenServerName
 } from './view.js'
 
 const TITLE = 'Run on chosen servers'
@@ -67,7 +68,12 @@ export function PlacementEditor({
   const [adding, setAdding] = useState('')
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const servers = columns.filter((c) => c.id !== '')
+  const known = columns.filter((c) => c.id !== '').map((c) => ({ id: c.id, name: c.name }))
+  // A server no longer on the board must still be one a list can be cleared of.
+  const unseen = [...new Set(Object.values(draft).flat())]
+    .filter((id) => !known.some((c) => c.id === id))
+    .map((id) => ({ id, name: unseenServerName(id) }))
+  const servers = [...known, ...unseen]
   const addable = pluginChoices(installed, []).filter(
     (p) => !masterPlugins.includes(p.id) && draft[p.id] === undefined
   )
@@ -149,7 +155,11 @@ export function PlacementEditor({
               )
             })}
           </div>
-          {order.length === 0 && <p className="muted">Runs nowhere until a server is chosen.</p>}
+          {order.length === 0 && (
+            <p className="muted">
+              Choose a server; without one, the plugin is not placed and is left as it is.
+            </p>
+          )}
         </section>
       ))}
       <div className="address">

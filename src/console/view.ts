@@ -194,10 +194,14 @@ export function placedOn(placement: Placement, columns: ServerColumn[]): Map<str
   return on
 }
 
+export function unseenServerName(id: string): string {
+  return `a server not seen (${id.slice(0, 8)})`
+}
+
 /** A placement's servers by name, in order. */
 export function orderText(order: readonly string[], columns: ServerColumn[]): string {
   return order
-    .map((id) => columns.find((c) => c.id === id)?.name ?? `a server not seen (${id.slice(0, 8)})`)
+    .map((id) => columns.find((c) => c.id === id)?.name ?? unseenServerName(id))
     .join(', then ')
 }
 
