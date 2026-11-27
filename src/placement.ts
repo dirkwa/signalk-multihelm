@@ -100,6 +100,13 @@ export class UpSince {
     staleMs: number,
     now: number
   ): void {
+    // A server left off every list starts afresh once it is placed again.
+    const tracked = new Set(ids)
+    for (const id of this.since.keys()) {
+      if (!tracked.has(id)) {
+        this.since.delete(id)
+      }
+    }
     for (const id of ids) {
       const seen = lastSeen(id)
       if (seen !== undefined && now - seen <= staleMs) {

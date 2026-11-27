@@ -74,6 +74,15 @@ describe('placing plugins on chosen servers', () => {
     up.update(['a'], (id) => seen[id], STALE, now + STALE + 1)
     expect(up.get('a')).toBeUndefined()
   })
+
+  it('forgets a server left off every list, so it holds afresh when placed again', () => {
+    const up = new UpSince()
+    const seen = { a: now }
+    up.update(['a'], (id) => seen[id as 'a'], STALE, now)
+    up.update([], (id) => seen[id as 'a'], STALE, now + 10_000)
+    up.update(['a'], (id) => seen[id as 'a'], STALE, now + 10_000)
+    expect(up.get('a')).toBe(now + 10_000)
+  })
 })
 
 describe('the placement dataset', () => {
