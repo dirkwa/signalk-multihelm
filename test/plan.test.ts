@@ -146,6 +146,8 @@ describe('the plugin with the plan', () => {
         fs.readFileSync(path.join(dir, 'plan', 'plan.json'), 'utf8')
       ) as Record<string, ServerPlan>
       expect(plan[id]?.settings).toEqual(settings({ takeOver: 1 }))
+      // Marked applied only after the plan is written; without it the next start publishes again.
+      expect(fs.existsSync(path.join(dir, 'plan', 'applied.json'))).toBe(true)
     })
     void plugin.stop()
     expect(saved).toEqual([])
