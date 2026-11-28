@@ -16,12 +16,18 @@ export function forget(id: string): Promise<unknown> {
   return send(`${BASE}/paired-by?id=${encodeURIComponent(id)}`, 'DELETE')
 }
 
+function alsoAt(addresses: string[]): string[] {
+  return addresses.length > 1 ? [`also ${addresses.slice(1).join(', ')}`] : []
+}
+
 /** Pairing this server with another: the servers found on the network, or an address. */
 export function AddServer({ status }: { status: Status }) {
   const [address, setAddress] = useState('')
   const [busy, setBusy] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
-  const found = unpairedServers(status)
+  const unpaired = unpairedServers(status)
+  const found = unpaired.filter((server) => server.answers !== false)
+  const silent = unpaired.filter((server) => server.answers === false)
 
   const start = async (url: string): Promise<boolean> => {
     setBusy(url)
@@ -64,8 +70,9 @@ export function AddServer({ status }: { status: Status }) {
               <span>
                 {server.name}
                 <small className="help">
-                  {server.vessel ? `${server.vessel} · ` : ''}
-                  {server.url}
+                  {[server.vessel, server.url, ...alsoAt(server.addresses)]
+                    .filter(Boolean)
+                    .join(' · ')}
                 </small>
               </span>
               <button
@@ -79,6 +86,12 @@ export function AddServer({ status }: { status: Status }) {
             </li>
           ))}
         </ul>
+      )}
+      {silent.length > 0 && (
+        <p className="muted">
+          Announced, but not answering:{' '}
+          {silent.map((server) => `${server.name} (${server.url})`).join(', ')}.
+        </p>
       )}
       <form className="address" onSubmit={(e) => void submit(e)}>
         <input

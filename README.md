@@ -21,7 +21,10 @@ card ([The master](#the-master)). Then, on each of the others, open the
 console and:
 
 1. **Pair** with the master under **Pair with another server**: pick it from
-   the servers found on the network, or enter its address.
+   the servers found on the network, or enter its address. A server on more
+   than one network is listed once, at the address that answers on the
+   network of this server's default route where it can; those that are
+   announced but do not answer are named, not offered.
 2. **Approve on the master**: log in there and approve the request
    “Multihelm on _this server_” under **Security → Access Requests**. The
    console links to it and shows the master's card as soon as it is

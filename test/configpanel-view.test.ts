@@ -103,9 +103,19 @@ describe('the configuration panel', () => {
 
   it('offers only the servers found that are not paired, by address or by name', () => {
     const found = [
-      { name: 'helm', url: 'http://198.51.100.10', lastSeen: 0 },
-      { name: 'salon', url: 'http://192.0.2.10', lastSeen: 0 },
-      { name: 'nav', url: 'http://192.0.2.20', lastSeen: 0 }
+      {
+        name: 'helm',
+        url: 'http://198.51.100.10',
+        addresses: ['http://198.51.100.10'],
+        lastSeen: 0
+      },
+      {
+        name: 'salon',
+        url: 'http://198.51.100.11',
+        addresses: ['http://198.51.100.11', 'http://192.0.2.10'],
+        lastSeen: 0
+      },
+      { name: 'nav', url: 'http://192.0.2.20', addresses: ['http://192.0.2.20'], lastSeen: 0 }
     ]
     expect(
       unpairedServers(status({ peers: [helm], discovered: found })).map((s) => s.name)
@@ -119,7 +129,14 @@ describe('the configuration panel', () => {
       url: 'http://192.0.2.20',
       state: 'waiting-approval'
     }
-    const found = [{ name: 'nav', url: 'http://192.0.2.20', lastSeen: 0 }]
+    const found = [
+      {
+        name: 'nav',
+        url: 'http://198.51.100.20',
+        addresses: ['http://198.51.100.20', 'http://192.0.2.20'],
+        lastSeen: 0
+      }
+    ]
     expect(peerName(waiting, found)).toBe('nav')
     expect(peerName(waiting, [])).toBe('http://192.0.2.20')
     expect(peerName(helm, found)).toBe('helm')

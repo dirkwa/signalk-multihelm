@@ -153,7 +153,9 @@ describe('the console board', () => {
     const [, column] = serverColumns(
       status({
         peers: [waiting],
-        discovered: [{ name: 'nav', url: 'http://192.0.2.20', lastSeen: now }]
+        discovered: [
+          { name: 'nav', url: 'http://192.0.2.20', addresses: ['http://192.0.2.20'], lastSeen: now }
+        ]
       })
     )
     expect([column?.name, column?.url]).toEqual(['nav', 'http://192.0.2.20'])
@@ -210,9 +212,18 @@ describe('the console board', () => {
       status({
         pairedBy,
         discovered: [
-          { name: 'pi5radar', url: 'http://192.0.2.20:3000', lastSeen: now },
-          { name: 'pi5radar', url: 'https://192.0.2.20:3443', lastSeen: now },
-          { name: 'other', url: 'http://192.0.2.30:3000', lastSeen: now }
+          {
+            name: 'pi5radar',
+            url: 'https://192.0.2.20:3443',
+            addresses: ['https://192.0.2.20:3443', 'http://192.0.2.20:3000'],
+            lastSeen: now
+          },
+          {
+            name: 'other',
+            url: 'http://192.0.2.30:3000',
+            addresses: ['http://192.0.2.30:3000'],
+            lastSeen: now
+          }
         ]
       })
     )
@@ -222,6 +233,21 @@ describe('the console board', () => {
 
     const [, unknown] = serverColumns(status({ pairedBy }))
     expect(unknown?.pairUrl).toBeUndefined()
+    const [, silent] = serverColumns(
+      status({
+        pairedBy,
+        discovered: [
+          {
+            name: 'pi5radar',
+            url: 'http://192.0.2.20',
+            addresses: ['http://192.0.2.20'],
+            lastSeen: now,
+            answers: false
+          }
+        ]
+      })
+    )
+    expect(silent?.pairUrl).toBeUndefined()
     expect(settingsNote(unknown ?? fail())).toContain('enter its address')
   })
 

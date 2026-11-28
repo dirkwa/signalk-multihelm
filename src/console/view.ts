@@ -104,9 +104,10 @@ export function offersMaster(column: ServerColumn, columns: ServerColumn[]): boo
 }
 
 function pairingAddress(name: string, discovered: Status['discovered']): { pairUrl?: string } {
-  const found = discovered.filter((server) => server.name === name)
-  const url = (found.find((server) => server.url.startsWith('https:')) ?? found[0])?.url
-  return url === undefined ? {} : { pairUrl: url }
+  const found = discovered.find(
+    (server) => server.name.toLowerCase() === name.toLowerCase() && server.answers !== false
+  )
+  return found === undefined ? {} : { pairUrl: found.url }
 }
 
 const PLAN_VERSION = [0, 10, 0]
