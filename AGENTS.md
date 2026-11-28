@@ -35,8 +35,10 @@ sets by hand on one server (see `README.md`).
 - `discovery.ts` — mDNS browse for `_signalk-http(s)._tcp`: one entry per
   instance name, its addresses ranked by whether they answer `/signalk`
   (`answersAt`, asked each minute), then by this server's networks, the
-  default route's first (`/proc/net/route`), then HTTPS. A service or an
-  address not announced for `FORGET_AFTER_MS` is dropped.
+  default route's first (`/proc/net/route`: its gateway's network, or its
+  interface's for a route without one), then HTTPS. A service or an address
+  not announced for `FORGET_AFTER_MS`, or taken back by its goodbye, is
+  dropped.
 - `vessel-settings.ts` — the vessel data and path metadata the user set,
   read from the server's base deltas (`app.config.baseDeltaEditor`).
 - `source-priorities.ts` — the source priorities the user set, in the shape

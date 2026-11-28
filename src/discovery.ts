@@ -25,6 +25,8 @@ const QUERY_INTERVAL_MS = 30_000
 const FORGET_AFTER_MS = 3 * 60_000
 /** How often each address is asked whether it answers. */
 const CHECK_EVERY_MS = 60_000
+/** How often the addresses due to be asked are looked for. */
+const CHECK_TICK_MS = 10_000
 
 export interface DiscoveredServer {
   /** The mDNS instance name, usually the host name. */
@@ -105,8 +107,14 @@ function onNetwork(network: Network, address: string): boolean {
   return host !== null && own !== null && mask !== null && (host & mask) === (own & mask)
 }
 
-/** The gateways of the default routes in a Linux `/proc/net/route`, lowest metric first. */
-export function defaultGateways(routeTable: string): string[] {
+export interface DefaultRoute {
+  iface: string
+  /** Null for a route on the link itself, without a gateway. */
+  gateway: string | null
+}
+
+/** The default routes in a Linux `/proc/net/route`, lowest metric first. */
+export function defaultRoutes(routeTable: string): DefaultRoute[] {
   return routeTable
     .split('\n')
     .slice(1)
@@ -116,9 +124,13 @@ export function defaultGateways(routeTable: string): string[] {
         destination === '00000000' && mask === '00000000' && /^[0-9A-F]{8}$/i.test(gateway)
     )
     .sort((a, b) => Number(a[6]) - Number(b[6]))
-    .map(([, , gateway = '']) =>
-      [6, 4, 2, 0].map((at) => String(parseInt(gateway.slice(at, at + 2), 16))).join('.')
-    )
+    .map(([iface = '', , gateway = '']) => ({
+      iface,
+      gateway:
+        gateway === '00000000'
+          ? null
+          : [6, 4, 2, 0].map((at) => String(parseInt(gateway.slice(at, at + 2), 16))).join('.')
+    }))
 }
 
 function routeTable(): string {
@@ -134,15 +146,17 @@ export function ownNetworks(
   interfaces: NodeJS.Dict<os.NetworkInterfaceInfo[]> = os.networkInterfaces(),
   routes: string = routeTable()
 ): Network[] {
-  const networks = Object.values(interfaces).flatMap((list) =>
+  const networks = Object.entries(interfaces).flatMap(([iface, list]) =>
     (list ?? [])
       .filter((info) => info.family === 'IPv4' && !info.internal)
-      .map((info) => ({ address: info.address, netmask: info.netmask }))
+      .map((info) => ({ iface, network: { address: info.address, netmask: info.netmask } }))
   )
-  const primary = defaultGateways(routes).flatMap((gateway) =>
-    networks.filter((network) => onNetwork(network, gateway))
+  const primary = defaultRoutes(routes).flatMap(({ iface, gateway }) =>
+    networks
+      .filter((own) => (gateway === null ? own.iface === iface : onNetwork(own.network, gateway)))
+      .map((own) => own.network)
   )
-  return [...new Set([...primary, ...networks])]
+  return [...new Set([...primary, ...networks.map((own) => own.network)])]
 }
 
 function preference(url: string, answers: boolean | undefined, networks: Network[]): number[] {
@@ -168,6 +182,7 @@ function compare(a: number[], b: number[]): number {
 export class ServerDiscovery {
   private mdns: ReturnType<typeof makeMdns> | null = null
   private timer: NodeJS.Timeout | null = null
+  private checkTimer: NodeJS.Timeout | null = null
   private readonly instances = new Map<string, Instance>()
   /** Per host name, each address and when it was last announced. */
   private readonly hosts = new Map<string, Map<string, number>>()
@@ -202,12 +217,19 @@ export class ServerDiscovery {
     }
     query()
     this.timer = setInterval(query, QUERY_INTERVAL_MS)
+    this.checkTimer = setInterval(() => {
+      this.checkAnswers(Date.now())
+    }, CHECK_TICK_MS)
   }
 
   stop(): void {
     if (this.timer) {
       clearInterval(this.timer)
       this.timer = null
+    }
+    if (this.checkTimer) {
+      clearInterval(this.checkTimer)
+      this.checkTimer = null
     }
     this.mdns?.destroy()
     this.mdns = null
@@ -265,10 +287,16 @@ export class ServerDiscovery {
     for (const record of records) {
       if (record.type === 'SRV') {
         const instance = this.instances.get(record.name)
-        if (instance) {
+        if (!instance) {
+          continue
+        }
+        if (record.ttl !== 0) {
           instance.target = record.data.target
           instance.port = record.data.port
           instance.seen = now
+        } else if (instance.target === record.data.target && instance.port === record.data.port) {
+          delete instance.target
+          delete instance.port
         }
       } else if (record.type === 'TXT') {
         const instance = this.instances.get(record.name)
@@ -346,12 +374,12 @@ export class ServerDiscovery {
         continue
       }
       check.running = true
+      check.at = now
       this.checks.set(url, check)
       void answers(url)
         .catch(() => false)
         .then((answered) => {
           check.answers = answered
-          check.at = Date.now()
           check.running = false
         })
     }

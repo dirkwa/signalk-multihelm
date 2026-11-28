@@ -4,8 +4,16 @@ import type { AddressInfo } from 'node:net'
 import type { Answer } from 'dns-packet'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
-import { defaultGateways, ownNetworks, ServerDiscovery, type Network } from '../src/discovery.js'
+import { defaultRoutes, ownNetworks, ServerDiscovery, type Network } from '../src/discovery.js'
 import { answersAt } from '../src/peer-client.js'
+
+vi.mock('multicast-dns', async () => {
+  const { EventEmitter } = await import('node:events')
+  return {
+    default: () =>
+      Object.assign(new EventEmitter(), { query: () => undefined, destroy: () => undefined })
+  }
+})
 
 const PRIMARY: Network = { address: '192.0.2.1', netmask: '255.255.255.0' }
 const RADAR: Network = { address: '198.51.100.1', netmask: '255.255.0.0' }
@@ -135,6 +143,52 @@ describe('server discovery', () => {
     ] as Answer[])
     expect(found.list()).toEqual([])
   })
+
+  it('withdraws the endpoint an SRV goodbye takes back', () => {
+    const { found } = discovery()
+    found.takeRecords(announce('helm', ['192.0.2.10']))
+    const srv = (target: string, ttl: number): Answer[] =>
+      [
+        {
+          type: 'SRV',
+          name: 'helm._signalk-http._tcp.local',
+          data: { target, port: 80 },
+          ttl
+        }
+      ] as Answer[]
+    found.takeRecords(srv('other.local', 0))
+    expect(found.list()).toHaveLength(1)
+    found.takeRecords(srv('helm.local', 0))
+    expect(found.list()).toEqual([])
+    found.takeRecords(srv('helm.local', 120))
+    expect(found.list()).toHaveLength(1)
+  })
+
+  it('asks each address again every minute, also without a new announcement', async () => {
+    vi.useFakeTimers()
+    const asked: string[] = []
+    const found = new ServerDiscovery(() => 3000, {
+      networks: () => [PRIMARY],
+      answers: (url) => {
+        asked.push(url)
+        return new Promise((resolve) => {
+          setTimeout(() => {
+            resolve(true)
+          }, 3000)
+        })
+      }
+    })
+    found.start()
+    found.takeRecords(announce('helm', ['192.0.2.10']))
+    expect(asked).toEqual(['http://192.0.2.10'])
+    await vi.advanceTimersByTimeAsync(60_000)
+    expect(asked).toHaveLength(2)
+    await vi.advanceTimersByTimeAsync(60_000)
+    expect(asked).toHaveLength(3)
+    found.stop()
+    await vi.advanceTimersByTimeAsync(60_000)
+    expect(asked).toHaveLength(3)
+  })
 })
 
 describe("this server's networks", () => {
@@ -145,13 +199,46 @@ describe("this server's networks", () => {
     'eth0\t0000A8C0\t00000000\t0001\t0\t0\t100\t00FFFFFF\t0\t0\t0'
   ].join('\n')
 
-  it('reads the default gateway from the route table', () => {
-    expect(defaultGateways(routes)).toEqual(['192.168.0.1'])
-    expect(defaultGateways('')).toEqual([])
+  const info = { mac: '00:00:00:00:00:00', cidr: null }
+  const ipv4 = (address: string, netmask: string) => ({
+    ...info,
+    address,
+    netmask,
+    family: 'IPv4' as const,
+    internal: false
+  })
+
+  it('reads the default routes from the route table', () => {
+    expect(defaultRoutes(routes)).toEqual([{ iface: 'eth0', gateway: '192.168.0.1' }])
+    expect(
+      defaultRoutes(`${routes}\nwlan0\t00000000\t00000000\t0001\t0\t0\t50\t00000000\t0\t0\t0`)
+    ).toEqual([
+      { iface: 'wlan0', gateway: null },
+      { iface: 'eth0', gateway: '192.168.0.1' }
+    ])
+    expect(defaultRoutes('')).toEqual([])
+  })
+
+  it('puts the network of a default route without a gateway first, by its interface', () => {
+    const onLink = [
+      'Iface\tDestination\tGateway \tFlags\tRefCnt\tUse\tMetric\tMask\t\tMTU\tWindow\tIRTT',
+      'wlan0\t00000000\t00000000\t0001\t0\t0\t600\t00000000\t0\t0\t0'
+    ].join('\n')
+    expect(
+      ownNetworks(
+        {
+          eth0: [ipv4('172.31.3.122', '255.255.0.0')],
+          wlan0: [ipv4('10.0.0.5', '255.255.255.0')]
+        },
+        onLink
+      )
+    ).toEqual([
+      { address: '10.0.0.5', netmask: '255.255.255.0' },
+      { address: '172.31.3.122', netmask: '255.255.0.0' }
+    ])
   })
 
   it('puts the network of the default route first, and leaves out loopback and IPv6', () => {
-    const info = { mac: '00:00:00:00:00:00', cidr: null }
     expect(
       ownNetworks(
         {
