@@ -80,12 +80,19 @@ describe('the master setting when a server starts', () => {
 })
 
 describe("the boat's choice of master", () => {
-  function boatMaster(): { master: BoatMaster; chosen: MasterChoice[]; changed: () => number } {
+  function boatMaster(fail: () => boolean = () => false): {
+    master: BoatMaster
+    chosen: MasterChoice[]
+    changed: () => number
+  } {
     const chosen: MasterChoice[] = []
     let changes = 0
     const master = new BoatMaster({
       dir: path.join(dir, 'master'),
-      chosen: (choice) => chosen.push(choice),
+      chosen: (choice) => {
+        chosen.push(choice)
+        return fail() ? Promise.reject(new Error('cannot save')) : Promise.resolve()
+      },
       changed: () => {
         changes++
       }
@@ -125,6 +132,38 @@ describe("the boat's choice of master", () => {
     expect(master.dataset.isValidKey?.('master')).toBe(true)
     expect(master.dataset.isValidKey?.('server-x')).toBe(false)
     expect(await master.dataset.remove('master')).toBe(false)
+  })
+
+  it('keeps a later choice of its own over a peer’s, of two at once the larger server id', async () => {
+    const { master, chosen } = boatMaster()
+    await master.choose(ME)
+    await master.choose(ME)
+    const entry = (serverId: string, term: number) => ({
+      key: 'master',
+      meta: { serverId, term },
+      files: []
+    })
+    expect(await master.dataset.apply(entry(OTHER, 1))).toBe(false)
+    expect(master.choice()).toEqual({ serverId: ME, term: 2 })
+    expect(await master.dataset.apply(entry('aa', 2))).toBe(false)
+    expect(await master.dataset.apply(entry(OTHER, 2))).toBe(true)
+    expect(master.choice()).toEqual({ serverId: OTHER, term: 2 })
+    expect(await master.dataset.apply(entry(ME, 3))).toBe(true)
+    expect(master.choice()).toEqual({ serverId: ME, term: 3 })
+    expect(chosen.map((c) => c.term)).toEqual([1, 2, 2, 3])
+  })
+
+  it('fails a choice it cannot apply, and applies it again when it comes again', async () => {
+    let failing = true
+    const { master, chosen } = boatMaster(() => failing)
+    const entry = { key: 'master', meta: { serverId: ME, term: 4 }, files: [] }
+    await expect(master.dataset.apply(entry)).rejects.toThrow('cannot save')
+    failing = false
+    expect(await master.dataset.apply(entry)).toBe(true)
+    expect(chosen).toEqual([
+      { serverId: ME, term: 4 },
+      { serverId: ME, term: 4 }
+    ])
   })
 })
 
@@ -171,6 +210,40 @@ describe('the plugin with a choice of master', () => {
       expect(file('applied.json')).toEqual({ master: true, term: 1 })
     })
     expect(saved).toEqual([])
+    void plugin.stop()
+  })
+
+  it('applies a choice it could not save on the next start', async () => {
+    const saved: object[] = []
+    const { app: host } = app(saved)
+    const plugin = createPlugin(host)
+    plugin.start({ master: true }, () => undefined)
+    void plugin.stop()
+    fs.writeFileSync(
+      path.join(dir, 'master', 'master.json'),
+      JSON.stringify({ serverId: OTHER, term: 3 })
+    )
+    const errors: string[] = []
+    const failing = {
+      ...host,
+      savePluginOptions: (_configuration: object, cb: (err: Error | null) => void) => {
+        cb(new Error('disk full'))
+      },
+      error: (msg: string) => errors.push(msg)
+    } as unknown as ServerAPI
+    const broken = createPlugin(failing)
+    broken.start({ master: true }, () => undefined)
+    await vi.waitFor(() => {
+      expect(errors.some((e) => e.includes('disk full'))).toBe(true)
+    })
+    expect(file('applied.json')).toEqual({ master: true, term: 0 })
+    void broken.stop()
+
+    plugin.start({ master: true }, () => undefined)
+    await vi.waitFor(() => {
+      expect(saved).toEqual([{ master: false }])
+      expect(file('applied.json')).toEqual({ master: false, term: 3 })
+    })
     void plugin.stop()
   })
 

@@ -121,7 +121,11 @@ sets by hand on one server (see `README.md`).
   boat's choice of master. Each server applies it to its own `master`
   setting (`masterOnStart`, and on every change), from which the election
   reads as before; a `master` changed in the plugin settings is published as
-  the next term. `applied.json` holds the setting and the term it follows.
+  the next term. A peer's choice is taken only over an older one (the later
+  term, then the larger server id); otherwise `apply` keeps this server's,
+  which goes back to the peers. Applying it awaits the saved setting, so a
+  failed save fails `apply` and the next round tries again. `applied.json`
+  holds the setting and the term it follows.
 - `console/` — the console web app Signal K serves from `public/`
   (`vite.console.config.ts`, built after the panel, which empties
   `public/`): every server side by side, read from `status`. It bundles its

@@ -6,6 +6,7 @@ import {
   attention,
   consoleRoleNotice,
   installedPlugins,
+  offersMaster,
   placedOn,
   pluginName,
   type SavedEdits,
@@ -196,10 +197,14 @@ export function Board() {
             edit={() => {
               setEditing(column)
             }}
-            choose={async () => {
-              await send(`${BASE}/master`, 'PUT', { serverId: column.id })
-              status.reload()
-            }}
+            {...(offersMaster(column, columns)
+              ? {
+                  choose: async () => {
+                    await send(`${BASE}/master`, 'PUT', { serverId: column.id })
+                    status.reload()
+                  }
+                }
+              : {})}
           />
         ))}
       </section>
@@ -366,8 +371,8 @@ interface ServerCardProps {
   installed: InstalledPlugin[]
   plan: ServerPlan | undefined
   edit: () => void
-  /** Makes this server the boat's master. */
-  choose: () => Promise<void>
+  /** Makes this server the boat's master; offered only when set. */
+  choose?: () => Promise<void>
 }
 
 function ServerCard({
@@ -393,7 +398,11 @@ function ServerCard({
         <p className="server-note">Pairs with this server; this server does not pair with it.</p>
       )}
       {column.chosen && !column.master && (
-        <p className="server-note">Chosen to be the master; it takes over within a minute.</p>
+        <p className="server-note">
+          {column.state === 'online'
+            ? 'Chosen to be the master; it takes over once the servers have taken the choice over.'
+            : 'Chosen to be the master; it takes over once it answers again.'}
+        </p>
       )}
       {masterPlugins.length > 0 && (
         <div className="roles">
@@ -411,7 +420,7 @@ function ServerCard({
             Settings
           </button>
         )}
-        {!column.master && !column.chosen && column.choosable && (
+        {choose && (
           <ActionButton
             label="Make master"
             busyLabel="Making master…"

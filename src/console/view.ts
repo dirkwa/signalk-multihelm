@@ -51,14 +51,15 @@ const OWN_ACCESS_URL = '/admin/#/security/access/requests'
 
 /** This server first, then the servers it pairs with, then those that only pair with it. */
 export function serverColumns(status: Status): ServerColumn[] {
-  const chosen = status.masterChoice?.serverId ?? null
+  const chosen = status.masterChoice?.serverId ?? ''
+  const isChosen = (id: string): boolean => chosen !== '' && chosen === id
   const follows = new Set(status.followsChoice ?? [])
   const here: ServerColumn = {
     id: status.serverId ?? '',
     name: status.name,
     here: true,
     master: status.role === 'master',
-    chosen: chosen !== null && chosen === status.serverId,
+    chosen: isChosen(status.serverId ?? ''),
     choosable: status.followsChoice !== undefined,
     state: 'online',
     versions: versionText(status),
@@ -69,7 +70,7 @@ export function serverColumns(status: Status): ServerColumn[] {
     name: peerName(peer, status.discovered),
     here: false,
     master: status.master !== null && status.master.id === peer.id,
-    chosen: chosen === peer.id,
+    chosen: isChosen(peer.id),
     choosable: follows.has(peer.id),
     state: peer.state === 'paired' ? (peer.online === true ? 'online' : 'offline') : peer.state,
     versions: versionText(peer),
@@ -86,9 +87,8 @@ export function serverColumns(status: Status): ServerColumn[] {
       name: server.name,
       here: false,
       master: false,
-      chosen: chosen === server.id,
-      // It takes the choice over from this server, as it pairs with it, if its Multihelm knows it.
-      choosable: status.followsChoice !== undefined,
+      chosen: isChosen(server.id),
+      choosable: follows.has(server.id),
       state: server.online ? 'online' : 'offline',
       versions: versionText(server),
       lastSeen: server.lastSeen,
@@ -96,6 +96,11 @@ export function serverColumns(status: Status): ServerColumn[] {
       ...pairingAddress(server.name, status.discovered)
     }))
   return [here, ...peers, ...pairedBy]
+}
+
+/** A server that follows the choice and is not the one chosen; the master too, while another is chosen. */
+export function offersMaster(column: ServerColumn, columns: ServerColumn[]): boolean {
+  return column.choosable && !column.chosen && (!column.master || columns.some((c) => c.chosen))
 }
 
 function pairingAddress(name: string, discovered: Status['discovered']): { pairUrl?: string } {

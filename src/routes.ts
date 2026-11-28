@@ -237,7 +237,16 @@ export function registerRoutes(
       plan: mh ? (boatPlan()?.plan.servers() ?? {}) : {},
       placement: mh ? (placement()?.get() ?? {}) : {},
       masterChoice: mh ? (boatPlan()?.master.choice() ?? null) : null,
-      followsChoice: mh ? [mh.serverId, ...mh.peersWithDataset(MASTER_DATASET)] : []
+      followsChoice: mh
+        ? [
+            mh.serverId,
+            ...mh.peersWithDataset(MASTER_DATASET),
+            ...mh
+              .pairedByInfo()
+              .filter((s) => s.followsChoice === true)
+              .map((s) => s.id)
+          ]
+        : []
     }
     res.json(status)
   })

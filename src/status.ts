@@ -76,8 +76,8 @@ export interface Status {
    */
   masterChoice?: MasterChoice | null
   /**
-   * The servers known to follow that choice: this one and the paired peers
-   * whose Multihelm knows it. Older versions leave it out.
+   * The servers known to follow that choice: this one, and the servers
+   * paired either way whose Multihelm knows it. Older versions leave it out.
    */
   followsChoice?: string[]
 }

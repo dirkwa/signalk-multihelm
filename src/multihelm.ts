@@ -911,6 +911,7 @@ export class Multihelm {
       name: from.name,
       ...(from.signalk ? { signalk: from.signalk } : {}),
       ...(from.multihelm ? { multihelm: from.multihelm } : {}),
+      ...(from.masterTerm === undefined ? {} : { followsChoice: true }),
       lastSeen: now
     }
     this.pairedBy.set(server.id, server)
@@ -924,7 +925,8 @@ export class Multihelm {
       !known ||
       known.name !== server.name ||
       known.signalk !== server.signalk ||
-      known.multihelm !== server.multihelm
+      known.multihelm !== server.multihelm ||
+      known.followsChoice !== server.followsChoice
     if (changed || now - this.pairedBySavedAt >= PAIRED_BY_SAVE_MS) {
       this.savePairedBySoon()
     }
@@ -1129,11 +1131,23 @@ export class Multihelm {
       if (!incoming) {
         return false
       }
-      await definition.apply(incoming)
+      const taken = await definition.apply(incoming)
       await this.cleanIncoming(definition.id, incoming)
       const after = (await definition.list()).find((e) => e.key === remote.key)
       if (after) {
         dataset.listed.set(after.key, after)
+      }
+      if (taken === false && after) {
+        // Kept here: the listing takes what this server holds for a change of its own, past the peer's version.
+        library.seq++
+        library.entries[remote.key] = {
+          ...(local ?? { key: remote.key, meta: null, files: [] }),
+          fingerprint: '',
+          version: remote.version,
+          seq: library.seq
+        }
+        await this.listLocked(dataset)
+        return true
       }
       recordRemote(library, remote, after ? toListed(after) : null)
       return true

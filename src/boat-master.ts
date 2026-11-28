@@ -9,7 +9,8 @@
  * says in its `hello` the term its setting follows. A server that was off
  * while the master moved comes back with its old setting and an older term,
  * so the others do not count it as the master until it has taken the
- * choice over.
+ * choice over. A server takes a peer's choice only over an older one: the
+ * later term wins, and of two made at once the larger server id.
  */
 
 import fs from 'node:fs'
@@ -41,6 +42,10 @@ export type AppliedMaster = Static<typeof AppliedMasterSchema>
 
 export function isMasterChoice(value: unknown): value is MasterChoice {
   return Value.Check(MasterChoiceSchema, value)
+}
+
+function laterChoice(a: MasterChoice, b: MasterChoice): boolean {
+  return a.term > b.term || (a.term === b.term && a.serverId > b.serverId)
 }
 
 export type MasterOnStart =
@@ -78,8 +83,8 @@ export function masterOnStart(
 
 export interface BoatMasterHost {
   dir: string
-  /** The boat's choice changed, on a peer or here. */
-  chosen: (choice: MasterChoice) => void
+  /** Applies the boat's choice, made on a peer or here, to this server; fails when it cannot. */
+  chosen: (choice: MasterChoice) => Promise<void>
   /** The choice changed here, to be offered to the peers. */
   changed: () => void
 }
@@ -106,7 +111,7 @@ export class BoatMaster {
       const choice = { serverId, term: (this.current?.term ?? 0) + 1 }
       await this.write(choice)
       this.host.changed()
-      this.host.chosen(choice)
+      await this.host.chosen(choice)
       return choice
     })
   }
@@ -141,14 +146,22 @@ export class BoatMaster {
     list: (): Promise<DatasetEntry[]> =>
       Promise.resolve(this.current ? [{ key: KEY, meta: this.current, files: [] }] : []),
 
-    apply: (entry: IncomingEntry): Promise<void> => {
+    apply: (entry: IncomingEntry): Promise<boolean> => {
       if (!isMasterChoice(entry.meta) || entry.files.length > 0) {
         return Promise.reject(new Error('not a choice of master'))
       }
       const choice = entry.meta
       return this.queued(async () => {
-        await this.write(choice)
-        this.host.chosen(choice)
+        const current = this.current
+        if (current !== null && laterChoice(current, choice)) {
+          return false
+        }
+        if (current?.term !== choice.term || current.serverId !== choice.serverId) {
+          await this.write(choice)
+        }
+        // Also for the choice it holds, so one this server failed to apply is tried again.
+        await this.host.chosen(choice)
+        return true
       })
     },
 

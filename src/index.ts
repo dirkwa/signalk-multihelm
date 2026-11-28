@@ -372,9 +372,7 @@ export default function (app: ServerAPI): Plugin {
       const serverId = store.serverId()
       const boatMaster = new BoatMaster({
         dir: path.join(app.getDataDirPath(), 'master'),
-        chosen: (choice) => {
-          followChoice(choice)
-        },
+        chosen: (choice) => followChoice(choice),
         changed: () => {
           masterHandle.changed()
         }
@@ -433,14 +431,15 @@ export default function (app: ServerAPI): Plugin {
        * Saves the settings `change` makes of the current ones and restarts
        * with them, then `record`s that they apply; one change at a time, in
        * order. A change that returns null saves nothing and only records.
+       * Fails when the settings cannot be saved.
        */
       const reconfigure = (
         what: string,
         change: (current: Config) => Config | null,
         record: () => void
-      ): void => {
+      ): Promise<void> => {
         const step = (): Promise<void> =>
-          new Promise((resolve) => {
+          new Promise((resolve, reject) => {
             if (run !== runs) {
               resolve()
               return
@@ -463,34 +462,38 @@ export default function (app: ServerAPI): Plugin {
             app.savePluginOptions(next, (error) => {
               if (error) {
                 app.error(`Multihelm: cannot save the ${what}: ${error.message}`)
-              } else {
-                configuration = next
-                recorded()
-                // A run that was stopped meanwhile must not restart the one that replaced it.
-                if (run === runs) {
-                  restartSoon()
-                }
+                reject(error)
+                return
+              }
+              configuration = next
+              recorded()
+              // A run that was stopped meanwhile must not restart the one that replaced it.
+              if (run === runs) {
+                restartSoon()
               }
               resolve()
             })
           })
-        saving = saving.then(step)
+        const result = saving.then(step)
+        saving = result.catch(() => undefined)
+        return result
       }
       const applyOwn = (planned: PlanSettings): void => {
         if (run !== runs || isDeepStrictEqual(planned, own)) {
           return
         }
+        // A failed save is logged; the plan is applied again on the next start.
         reconfigure(
           'settings planned for this server',
           (current) => ({ ...planned, master: current.master === true }),
           () => {
             plan.markApplied(planned)
           }
-        )
+        ).catch(() => undefined)
       }
-      const followChoice = (choice: MasterChoice): void => {
+      const followChoice = (choice: MasterChoice): Promise<void> => {
         const master = choice.serverId === mh.serverId
-        reconfigure(
+        return reconfigure(
           'choice of master',
           (current) => ((current.master === true) === master ? null : { ...current, master }),
           () => {
@@ -521,7 +524,8 @@ export default function (app: ServerAPI): Plugin {
         case 'apply': {
           const choice = boatMaster.choice()
           if (choice) {
-            followChoice(choice)
+            // A failed save is logged; the choice is applied again on the next start.
+            followChoice(choice).catch(() => undefined)
           }
           break
         }

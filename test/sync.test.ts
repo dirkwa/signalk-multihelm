@@ -31,6 +31,8 @@ class FolderDataset implements DatasetDefinition {
   readonly meta = new Map<string, unknown>()
   readonly removed: string[] = []
   keep = new Set<string>()
+  /** Entries whose meta and files this server keeps over a peer's. */
+  hold = new Set<string>()
 
   constructor(readonly dir: string) {}
 
@@ -52,7 +54,10 @@ class FolderDataset implements DatasetDefinition {
     )
   }
 
-  apply = async (entry: Parameters<DatasetDefinition['apply']>[0]): Promise<void> => {
+  apply = async (entry: Parameters<DatasetDefinition['apply']>[0]): Promise<boolean> => {
+    if (this.hold.has(entry.key)) {
+      return false
+    }
     const folder = path.join(this.dir, entry.key)
     await fs.promises.mkdir(folder, { recursive: true })
     for (const file of entry.files) {
@@ -66,6 +71,7 @@ class FolderDataset implements DatasetDefinition {
       }
     }
     this.meta.set(entry.key, entry.meta)
+    return true
   }
 
   remove = async (key: string): Promise<boolean> => {
@@ -240,6 +246,25 @@ describe('two servers', () => {
     expect(read(a.dataset.dir, 'mine', 'cells')).toBe('cells')
     await b.mh.runRound()
     expect(read(b.dataset.dir, 'mine', 'cells')).toBe('cells')
+  })
+
+  it('offers an entry the dataset keeps over a newer one back to the peer', async () => {
+    write(a.dataset.dir, 'held', 'cells', 'cells')
+    a.dataset.meta.set('held', 'from a')
+    await a.mh.runRound()
+    await b.mh.runRound()
+    expect(b.dataset.meta.get('held')).toBe('from a')
+
+    b.dataset.meta.set('held', 'from b')
+    await b.mh.runRound()
+    a.dataset.hold.add('held')
+    await a.mh.runRound()
+    expect(a.dataset.meta.get('held')).toBe('from a')
+    a.dataset.hold.delete('held')
+    await b.mh.runRound()
+    expect(b.dataset.meta.get('held')).toBe('from a')
+    await a.mh.runRound()
+    expect(a.dataset.meta.get('held')).toBe('from a')
   })
 
   it('ignores keys the dataset does not accept', async () => {
@@ -575,6 +600,7 @@ describe('the overview of the servers', () => {
         name: 'overview-member',
         signalk: '2.37.0',
         multihelm: '1.0.0-overview-member',
+        followsChoice: true,
         lastSeen: expect.any(Number) as number,
         online: true
       }

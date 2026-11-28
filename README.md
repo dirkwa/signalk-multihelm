@@ -426,7 +426,7 @@ app.onPropertyValues('multihelm', (values) => {
   handle = mh?.registerDataset?.({
     id: 'my-plugin/things',
     list: async () => [...],     // what this server holds now
-    apply: async (entry) => {},  // take over a peer's entry (verified files)
+    apply: async (entry) => {},  // take over a peer's entry (verified files); false keeps this server's
     remove: async (key) => true  // a peer deleted it; false keeps it here
   })
 })
