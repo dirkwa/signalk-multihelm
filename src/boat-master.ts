@@ -197,15 +197,15 @@ export class BoatMaster {
       }
       const choice = entry.meta
       return this.queued(async () => {
-        const current = this.current
-        if (current !== null && laterChoice(current, choice)) {
-          return false
-        }
         const pending = this.pending
         if (pending !== null && laterChoice(pending, choice)) {
           // The later choice goes first, and back to the peer in place of this one.
           await this.host.chosen(pending)
           await this.keep(pending)
+          return false
+        }
+        const current = this.current
+        if (current !== null && laterChoice(current, choice)) {
           return false
         }
         // Listed only once applied, so a choice that failed stays the peer's and comes again next round.

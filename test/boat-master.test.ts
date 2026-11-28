@@ -215,6 +215,20 @@ describe("the boat's choice of master", () => {
     expect(fs.existsSync(path.join(dir, 'master', 'pending.json'))).toBe(false)
   })
 
+  it('applies a later pending choice also for a peer’s older than the one applied', async () => {
+    let failing = false
+    const { master } = boatMaster(() => failing)
+    await master.dataset.apply({ key: 'master', meta: { serverId: ME, term: 3 }, files: [] })
+    failing = true
+    const later = { serverId: OTHER, term: 5 }
+    await expect(master.dataset.apply({ key: 'master', meta: later, files: [] })).rejects.toThrow()
+
+    failing = false
+    const older = { key: 'master', meta: { serverId: ME, term: 2 }, files: [] }
+    expect(await master.dataset.apply(older)).toBe(false)
+    expect(master.choice()).toEqual(later)
+  })
+
   it('keeps the pending choice when one made here fails', async () => {
     const { master } = boatMaster(() => true)
     const pending = { serverId: OTHER, term: 5 }
