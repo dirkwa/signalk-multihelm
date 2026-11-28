@@ -5,6 +5,7 @@
 
 import type { PeerInfo, Role } from './api.js'
 import type { DiscoveredServer } from './discovery.js'
+import type { Placement } from './placement.js'
 import type { ServerPlan } from './plan.js'
 import type { PairedServer } from './store.js'
 
@@ -63,4 +64,9 @@ export interface Status {
    * Older versions leave it out.
    */
   plan?: Record<string, ServerPlan>
+  /**
+   * The plugins placed on chosen servers: each runs on the first server of
+   * its list that is there. The same on every server; older versions leave it out.
+   */
+  placement?: Placement
 }

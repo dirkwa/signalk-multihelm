@@ -903,6 +903,23 @@ export class Multihelm {
     }
   }
 
+  /** When this server's Multihelm started. */
+  since(): number {
+    return this.startedAt
+  }
+
+  /** When a server last answered this one or asked it, either way of pairing; undefined when never. */
+  lastSeen(serverId: string): number | undefined {
+    const asked = this.pairedBy.get(serverId)?.lastSeen
+    // One server may be paired under more than one address.
+    const times = this.peerInfo()
+      .filter((p) => p.id === serverId)
+      .map((p) => p.lastSeen)
+    times.push(asked)
+    const known = times.filter((t): t is number => t !== undefined)
+    return known.length === 0 ? undefined : Math.max(...known)
+  }
+
   /** The servers paired with this one, by name. */
   pairedByInfo(): PairedByInfo[] {
     const now = Date.now()

@@ -55,6 +55,12 @@ sets by hand on one server (see `README.md`).
   (`PluginList`), kept in step as the `signalk-multihelm/settings` dataset, and
   `MasterOnlyPlugins`, which switches them through `/plugins/<id>/config`
   once the role is known, and not at all while no master is found.
+- `placement.ts` — the `signalk-multihelm/placement` dataset, one meta-only
+  entry (`plugins`: plugin id → server ids in order), and `placedHere`,
+  which says whether a placed plugin runs on this server from when the
+  servers before it were last seen (`Multihelm.lastSeen`) and since when
+  they are back (`UpSince`). `MasterOnlyPlugins` switches them with a
+  per-plugin `wanted`; a plugin on the master's list is never placed.
 - `shared-config.ts` — `SharedPluginConfig`: the
   `signalk-multihelm/plugin-config` dataset, one entry per plugin on the
   `signalk-multihelm/shared-plugins` list (a `PluginList`), its file the

@@ -7,6 +7,7 @@ import {
   type Notice
 } from '../configpanel/view.js'
 import { ConfigSchema } from '../config.js'
+import type { Placement } from '../placement.js'
 import type { PlanSettings } from '../plan.js'
 import type { Status } from '../status.js'
 
@@ -154,21 +155,54 @@ export function pluginChoices(installed: InstalledPlugin[], listed: string[]): P
 
 const MULTIHELM_ID = 'signalk-multihelm'
 
-/** A list saved from the console, and the status read made right after the save. */
-export interface SavedList {
-  ids: string[]
+/** What was saved from the console, and the status read made right after the save. */
+export interface Saved<T> {
+  value: T
   read: number
 }
 
-export type SavedLists = Partial<Record<'master-plugins' | 'shared-plugins', SavedList>>
+export interface SavedEdits {
+  'master-plugins'?: Saved<string[]>
+  'shared-plugins'?: Saved<string[]>
+  placement?: Saved<Placement>
+}
 
 /**
- * The list to show: the one saved here until a status read made after the
+ * What to show: the value saved here until a status read made after the
  * save has come in; a failed read leaves it, and an older read cannot
  * replace a later save, as only a newer read number does.
  */
-export function listShown(fromStatus: string[], statusRead: number, saved?: SavedList): string[] {
-  return saved !== undefined && statusRead < saved.read ? saved.ids : fromStatus
+export function shownAfterSave<T>(fromStatus: T, statusRead: number, saved?: Saved<T>): T {
+  return saved !== undefined && statusRead < saved.read ? saved.value : fromStatus
+}
+
+/**
+ * Where each placed plugin runs now, as this server sees it: on the first
+ * server of its list that is online. Servers this one does not know are
+ * passed over.
+ */
+export function placedOn(placement: Placement, columns: ServerColumn[]): Map<string, string[]> {
+  const on = new Map<string, string[]>()
+  for (const [id, order] of Object.entries(placement)) {
+    const host = order.find((server) =>
+      columns.some((c) => c.id === server && c.state === 'online')
+    )
+    if (host !== undefined) {
+      on.set(host, [...(on.get(host) ?? []), id])
+    }
+  }
+  return on
+}
+
+export function unseenServerName(id: string): string {
+  return `a server not seen (${id.slice(0, 8)})`
+}
+
+/** A placement's servers by name, in order. */
+export function orderText(order: readonly string[], columns: ServerColumn[]): string {
+  return order
+    .map((id) => columns.find((c) => c.id === id)?.name ?? unseenServerName(id))
+    .join(', then ')
 }
 
 export function pluginName(id: string, installed: InstalledPlugin[]): string {

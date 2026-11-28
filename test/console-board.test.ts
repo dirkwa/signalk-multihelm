@@ -5,13 +5,15 @@ import {
   attention,
   consoleRoleNotice,
   installedPlugins,
-  listShown,
   masterPluginProblems,
   pluginChoices,
   serverColumns,
   settingsNote,
-  stateText
+  shownAfterSave,
+  stateText,
+  type Saved
 } from '../src/console/view.js'
+import type { Placement } from '../src/placement.js'
 import type { Status } from '../src/status.js'
 
 function status(over: Partial<Status> = {}): Status {
@@ -115,20 +117,26 @@ describe('the console board', () => {
   })
 
   it('shows a list saved here until a status read made after the save has it', () => {
-    const saved = { ids: ['autopilot', 'rules'], read: 7 }
-    expect(listShown(['autopilot'], 6, saved)).toEqual(['autopilot', 'rules'])
+    const saved = { value: ['autopilot', 'rules'], read: 7 }
+    expect(shownAfterSave(['autopilot'], 6, saved)).toEqual(['autopilot', 'rules'])
     // A failed read changes no read number, so the saved list stays.
-    expect(listShown(['autopilot'], 6, saved)).toEqual(['autopilot', 'rules'])
-    expect(listShown(['autopilot', 'rules'], 7, saved)).toEqual(['autopilot', 'rules'])
-    expect(listShown(['rules'], 9, saved)).toEqual(['rules'])
-    expect(listShown(['autopilot'], 9)).toEqual(['autopilot'])
+    expect(shownAfterSave(['autopilot'], 6, saved)).toEqual(['autopilot', 'rules'])
+    expect(shownAfterSave(['autopilot', 'rules'], 7, saved)).toEqual(['autopilot', 'rules'])
+    expect(shownAfterSave(['rules'], 9, saved)).toEqual(['rules'])
+    expect(shownAfterSave(['autopilot'], 9)).toEqual(['autopilot'])
   })
 
   it('keeps a later save of the same list against a read made before it', () => {
-    const first = { ids: ['a'], read: 3 }
-    const second = { ids: ['a', 'b'], read: 5 }
-    expect(listShown(['a'], 4, first)).toEqual(['a'])
-    expect(listShown(['a'], 4, second)).toEqual(['a', 'b'])
+    const first = { value: ['a'], read: 3 }
+    const second = { value: ['a', 'b'], read: 5 }
+    expect(shownAfterSave(['a'], 4, first)).toEqual(['a'])
+    expect(shownAfterSave(['a'], 4, second)).toEqual(['a', 'b'])
+  })
+
+  it('shows a placement saved here until a status read made after the save has it', () => {
+    const saved: Saved<Placement> = { value: { db: ['b', 'a'] }, read: 4 }
+    expect(shownAfterSave({ db: ['a'] }, 3, saved)).toEqual({ db: ['b', 'a'] })
+    expect(shownAfterSave({}, 4, saved)).toEqual({})
   })
 
   it("shows this server's own versions", () => {

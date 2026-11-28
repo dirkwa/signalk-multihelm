@@ -185,8 +185,10 @@ export function masterPluginsWanted(e: Election): boolean | null {
 
 export interface SwitchHost {
   ids: () => string[]
-  /** true: run them on this server; false: stop them here; null: leave them as they are. */
-  wanted: () => boolean | null
+  /** true: run it on this server; false: stop it here; null: leave it as it is. */
+  wanted: (id: string) => boolean | null
+  /** How the log names where these plugins run, such as "runs on the master only". */
+  runsOn?: string
   access: OwnServerAccess
   /** This server, over loopback: `http(s)://127.0.0.1:<port>`. */
   ownUrl: () => string
@@ -333,9 +335,7 @@ export class MasterOnlyPlugins {
     this.busy = true
     void this.applyOnce()
       .catch((error: unknown) => {
-        this.host.error(
-          `Multihelm: switching the plugins that run on the master: ${errorText(error)}`
-        )
+        this.host.error(`Multihelm: switching plugins: ${errorText(error)}`)
       })
       .finally(() => {
         this.busy = false
@@ -347,7 +347,7 @@ export class MasterOnlyPlugins {
   }
 
   async applyOnce(): Promise<void> {
-    const wanted = this.host.wanted()
+    const runsOn = this.host.runsOn ?? 'runs on the master only'
     const ids = this.host.ids().filter((id) => id !== this.host.selfId)
     if (ids.length === 0) {
       return
@@ -358,6 +358,7 @@ export class MasterOnlyPlugins {
     }
     const base = this.host.ownUrl()
     for (const id of ids) {
+      const wanted = this.host.wanted(id)
       try {
         const state = await callServer('GET', pluginUrl(base, id), token)
         const enabled = (state as { enabled?: unknown } | null)?.enabled === true
@@ -369,7 +370,7 @@ export class MasterOnlyPlugins {
         const roleMoved = await exclusivePluginConfig(id, async () => {
           const options = await callServer('GET', pluginUrl(base, id, '/config'), token)
           // The role or the list may have moved during the requests; the next pass follows them.
-          if (this.host.wanted() !== wanted) {
+          if (this.host.wanted(id) !== wanted) {
             return true
           }
           if (!this.host.ids().includes(id)) {
@@ -385,9 +386,7 @@ export class MasterOnlyPlugins {
           }
           await callServer('POST', pluginUrl(base, id, '/config'), token, body)
           this.mark(id, wanted)
-          this.host.debug(
-            `Multihelm: ${wanted ? 'started' : 'stopped'} ${id}, which runs on the master only`
-          )
+          this.host.debug(`Multihelm: ${wanted ? 'started' : 'stopped'} ${id}, which ${runsOn}`)
           return false
         })
         if (roleMoved) {
@@ -395,7 +394,7 @@ export class MasterOnlyPlugins {
         }
       } catch (error) {
         if (error instanceof PeerHttpError && error.status === 404) {
-          this.host.debug(`Multihelm: ${id}, set to run on the master only, is not installed here`)
+          this.host.debug(`Multihelm: ${id}, which ${runsOn}, is not installed here`)
           this.mark(id, false)
           continue
         }
@@ -405,7 +404,7 @@ export class MasterOnlyPlugins {
           return
         }
         this.host.error(
-          `Multihelm: cannot ${wanted ? 'start' : 'stop'} ${id}, which runs on the master only: ${errorText(error)}`
+          `Multihelm: cannot ${wanted ? 'start' : 'stop'} ${id}, which ${runsOn}: ${errorText(error)}`
         )
       }
     }

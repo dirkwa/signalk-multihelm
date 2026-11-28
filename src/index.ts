@@ -31,7 +31,13 @@ import { MasterFollower } from './follow-master.js'
 import { MasterOnlyPlugins, PluginList, masterPluginsWanted } from './master-plugins.js'
 import { MasterHistory, canWithdrawHistoryProvider } from './history-from-master.js'
 import { MASTER_ROUTE, MasterProxy } from './master-proxy.js'
-import { Multihelm, ROUND_INTERVAL_MS } from './multihelm.js'
+import {
+  MASTER_CHECK_INTERVAL_MS,
+  MASTER_STALE_MS,
+  Multihelm,
+  ROUND_INTERVAL_MS
+} from './multihelm.js'
+import { PluginPlacement, UpSince, placedHere } from './placement.js'
 import { ROUTE_PREFIX, openStream } from './peer-client.js'
 import { registerRoutes } from './routes.js'
 import type { OwnAccessState } from './status.js'
@@ -159,6 +165,7 @@ export default function (app: ServerAPI): Plugin {
   let ownAccess: OwnServerAccess | null = null
   let masterPluginList: PluginList | null = null
   let sharedPlugins: { list: PluginList; config: SharedPluginConfig } | null = null
+  let pluginPlacement: PluginPlacement | null = null
   let masterControl: MasterControlAccess | null = null
   let dataSharer: DataSharer | null = null
   let planControl: PlanControl | null = null
@@ -543,6 +550,51 @@ export default function (app: ServerAPI): Plugin {
       const sharedListHandle = mh.registerDataset(sharedList.dataset)
       const sharedConfigHandle = mh.registerDataset(sharedConfig.dataset)
       sharedPlugins = { list: sharedList, config: sharedConfig }
+      const upSince = new UpSince()
+      // A plugin on the master's list stays the master's; its placement waits until it is taken off.
+      const placedIds = (): string[] =>
+        placement.ids().filter((id) => !pluginList.ids().includes(id))
+      const placedPlugins = new MasterOnlyPlugins({
+        ids: placedIds,
+        wanted: (id) => {
+          const order = placement.get()[id]
+          return order === undefined || !placedIds().includes(id)
+            ? null
+            : placedHere(
+                order,
+                mh.serverId,
+                {
+                  startedAt: mh.since(),
+                  lastSeen: (server) => mh.lastSeen(server),
+                  upSince: (server) => upSince.get(server),
+                  staleMs: MASTER_STALE_MS
+                },
+                Date.now()
+              )
+        },
+        runsOn: 'is placed on chosen servers',
+        access,
+        ownUrl,
+        selfId: PLUGIN_ID,
+        debug: (msg) => {
+          app.debug(msg)
+        },
+        error: (msg) => {
+          app.error(msg)
+        }
+      })
+      const switchPlaced = (): void => {
+        const servers = [...new Set(Object.values(placement.get()).flat())]
+        upSince.update(servers, (server) => mh.lastSeen(server), MASTER_STALE_MS, Date.now())
+        placedPlugins.apply()
+      }
+      const placement = new PluginPlacement(path.join(app.getDataDirPath(), 'placement'), () => {
+        switchPlaced()
+        placementHandle.changed()
+      })
+      const placementHandle = mh.registerDataset(placement.dataset)
+      pluginPlacement = placement
+      const placementTimer = setInterval(switchPlaced, MASTER_CHECK_INTERVAL_MS)
       const pluginsTimer = setInterval(() => {
         masterPlugins.apply()
       }, ROUND_INTERVAL_MS)
@@ -700,6 +752,9 @@ export default function (app: ServerAPI): Plugin {
         stopRolePlugins()
         masterPlugins.stop()
         settingsHandle.unregister()
+        clearInterval(placementTimer)
+        placedPlugins.stop()
+        placementHandle.unregister()
         planHandle.unregister()
         stopRoleAutopilot()
         autopilot?.stop()
@@ -730,6 +785,7 @@ export default function (app: ServerAPI): Plugin {
       apps = null
       masterPluginList = null
       sharedPlugins = null
+      pluginPlacement = null
       masterControl = null
       dataSharer = null
       planControl = null
@@ -759,7 +815,8 @@ export default function (app: ServerAPI): Plugin {
         () => sharedPlugins,
         () => dataSharer,
         () => apps,
-        () => planControl
+        () => planControl,
+        () => pluginPlacement
       )
     }
   }
