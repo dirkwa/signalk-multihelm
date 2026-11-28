@@ -6,6 +6,7 @@ import {
   consoleRoleNotice,
   installedPlugins,
   masterPluginProblems,
+  offersMaster,
   pluginChoices,
   serverColumns,
   settingsNote,
@@ -81,6 +82,65 @@ describe('the console board', () => {
       ['backup', false, false, 'online', true]
     ])
     expect(columns[1]?.versions).toBe('Signal K 2.33.0 · Multihelm 0.9.1')
+  })
+
+  it("knows which servers follow the boat's choice of master, and the one it names", () => {
+    const columns = serverColumns(
+      status({
+        peers: [port, stbd],
+        master: port,
+        masterChoice: { serverId: 's', term: 3 },
+        followsChoice: ['own', 's', 'b'],
+        pairedBy: [
+          { id: 'b', name: 'backup', lastSeen: now, online: true, followsChoice: true },
+          { id: 'o', name: 'older', lastSeen: now, online: true }
+        ]
+      })
+    )
+    expect(columns.map((c) => [c.name, c.chosen, c.choosable])).toEqual([
+      ['salon', false, true],
+      ['flybridge-port', false, false],
+      ['flybridge-stbd', true, true],
+      ['backup', false, true],
+      ['older', false, false]
+    ])
+    expect(serverColumns(status()).map((c) => c.choosable)).toEqual([false])
+  })
+
+  it('takes a choice of no master for no server, not one without an id yet', () => {
+    const waiting: PeerInfo = {
+      id: '',
+      name: 'nav',
+      url: 'http://192.0.2.20',
+      state: 'waiting-approval'
+    }
+    const columns = serverColumns(
+      status({ peers: [waiting], masterChoice: { serverId: '', term: 2 }, followsChoice: ['own'] })
+    )
+    expect(columns.map((c) => c.chosen)).toEqual([false, false])
+  })
+
+  it('offers Make master on a server that follows the choice, and on the master only while another is chosen', () => {
+    const columns = serverColumns(
+      status({
+        role: 'master',
+        peers: [port, stbd],
+        masterChoice: { serverId: 's', term: 3 },
+        followsChoice: ['own', 'p', 's']
+      })
+    )
+    expect(columns.map((c) => [c.name, offersMaster(c, columns)])).toEqual([
+      ['salon', true],
+      ['flybridge-port', true],
+      ['flybridge-stbd', false]
+    ])
+    const unchosen = serverColumns(
+      status({ role: 'master', peers: [port], followsChoice: ['own', 'p'] })
+    )
+    expect(unchosen.map((c) => [c.name, offersMaster(c, unchosen)])).toEqual([
+      ['salon', false],
+      ['flybridge-port', true]
+    ])
   })
 
   it('names a peer that has not answered yet as the network does, and keeps its address', () => {

@@ -44,6 +44,7 @@ import type { OwnAccessState } from './status.js'
 import { hasResourcesApi, resourceOfPath, resourcesDataset } from './resources-dataset.js'
 import { AppsOverview, LocalApps } from './installed-apps.js'
 import { OwnServerAccess } from './own-access.js'
+import { BoatMaster, masterOnStart, type MasterChoice } from './boat-master.js'
 import { BoatPlan, onStart, planSettings, type PlanControl, type PlanSettings } from './plan.js'
 import {
   DataSharer,
@@ -368,9 +369,25 @@ export default function (app: ServerAPI): Plugin {
       })
       dataSharer = sharer
       const store = new MultihelmStore(app.getDataDirPath())
+      const serverId = store.serverId()
+      const boatMaster = new BoatMaster({
+        dir: path.join(app.getDataDirPath(), 'master'),
+        chosen: (choice) => followChoice(choice),
+        changed: () => {
+          masterHandle.changed()
+        }
+      })
+      const atStart = masterOnStart(serverId, isMaster, boatMaster.applied(), boatMaster.latest())
+      let masterTerm =
+        atStart.action === 'publish'
+          ? atStart.choice.term
+          : atStart.action === 'record'
+            ? atStart.applied.term
+            : (boatMaster.applied()?.term ?? 0)
       const mh = new Multihelm(store, {
         serverName: () => os.hostname(),
         isMaster: () => isMaster,
+        masterTerm: () => masterTerm,
         standby: () => standby,
         stillRunning: () => masterPluginsRunHere(),
         versions: () => ({ signalk: host.config?.version, multihelm: multihelmVersion() }),
@@ -390,43 +407,151 @@ export default function (app: ServerAPI): Plugin {
       mh.start()
       const run = ++runs
       const own = planSettings(settings)
-      // Restarting from inside a dataset round would stop the round that is applying the change.
+      // The settings this run last saved; each change starts from them, so two do not undo each other.
+      let configuration: Config = { ...settings }
+      let saving: Promise<void> = Promise.resolve()
+      const restartSoon = (): void => {
+        if (selfRestart !== null) {
+          clearTimeout(selfRestart)
+        }
+        // Restarting from inside a dataset round would stop the round that is applying the change.
+        selfRestart = setTimeout(() => {
+          selfRestart = null
+          // The saves queued by now end first, so the restart starts with what they saved.
+          void saving.then(async () => {
+            if (run !== runs) {
+              return
+            }
+            await plugin.stop()
+            plugin.start(configuration, () => undefined)
+          })
+        }, 0)
+      }
+      /**
+       * Saves the settings `change` makes of the current ones and restarts
+       * with them, then `record`s that they apply; one change at a time, in
+       * order. A change that returns null saves nothing and only records.
+       * Fails when the settings cannot be saved.
+       */
+      const reconfigure = (
+        what: string,
+        change: (current: Config) => Config | null,
+        record: () => void
+      ): Promise<void> => {
+        const step = (): Promise<void> =>
+          new Promise((resolve, reject) => {
+            if (run !== runs) {
+              // The run that replaced this one read the settings and choices before this change.
+              reject(new Error('Multihelm restarted before it could apply this; try again'))
+              return
+            }
+            const recorded = (): void => {
+              try {
+                record()
+              } catch (e) {
+                app.error(
+                  `Multihelm: cannot record the ${what} applied on this server: ${e instanceof Error ? e.message : String(e)}`
+                )
+              }
+            }
+            const next = change(configuration)
+            if (next === null) {
+              recorded()
+              resolve()
+              return
+            }
+            app.savePluginOptions(next, (error) => {
+              if (error) {
+                app.error(`Multihelm: cannot save the ${what}: ${error.message}`)
+                reject(error)
+                return
+              }
+              configuration = next
+              recorded()
+              // A run that was stopped meanwhile must not restart the one that replaced it.
+              if (run === runs) {
+                restartSoon()
+              }
+              resolve()
+            })
+          })
+        const result = saving.then(step)
+        saving = result.catch(() => undefined)
+        return result
+      }
       const applyOwn = (planned: PlanSettings): void => {
         if (run !== runs || isDeepStrictEqual(planned, own)) {
           return
         }
-        const configuration = { ...planned, master: isMaster }
-        app.savePluginOptions(configuration, (error) => {
-          if (error) {
-            app.error(
-              `Multihelm: cannot save the settings planned for this server: ${error.message}`
-            )
-            return
-          }
-          try {
+        // A failed save is logged; the plan is applied again on the next start.
+        reconfigure(
+          'settings planned for this server',
+          (current) => ({ ...planned, master: current.master === true }),
+          () => {
             plan.markApplied(planned)
+          }
+        ).catch(() => undefined)
+      }
+      const followChoice = (choice: MasterChoice): Promise<void> => {
+        const master = choice.serverId === mh.serverId
+        return reconfigure(
+          'choice of master',
+          (current) => ((current.master === true) === master ? null : { ...current, master }),
+          () => {
+            boatMaster.markApplied({ master, term: choice.term })
+            if (master === isMaster && masterTerm !== choice.term) {
+              masterTerm = choice.term
+              mh.masterTermChanged()
+            }
+          }
+        )
+      }
+      const masterHandle = mh.registerDataset(boatMaster.dataset)
+      const notKept = (e: unknown): void => {
+        app.error(
+          `Multihelm: cannot keep the choice of master applied on this server: ${e instanceof Error ? e.message : String(e)}`
+        )
+      }
+      switch (atStart.action) {
+        case 'publish': {
+          const { choice } = atStart
+          boatMaster
+            .publish(choice)
+            .then(() => {
+              boatMaster.markApplied({ master: isMaster, term: choice.term })
+            })
+            .catch((error: unknown) => {
+              app.error(
+                `Multihelm: cannot make this server's master setting the boat's: ${error instanceof Error ? error.message : String(error)}`
+              )
+            })
+          break
+        }
+        case 'apply': {
+          const choice = boatMaster.latest()
+          if (choice) {
+            // A failed save is logged; the choice stays pending, applied again when a peer offers it or on the next start.
+            void followChoice(choice).then(
+              () => boatMaster.confirm(choice).catch(notKept),
+              () => undefined
+            )
+          }
+          break
+        }
+        case 'record': {
+          try {
+            boatMaster.markApplied(atStart.applied)
           } catch (e) {
             app.error(
-              `Multihelm: cannot record the settings applied on this server: ${e instanceof Error ? e.message : String(e)}`
+              `Multihelm: cannot record the choice of master applied on this server: ${e instanceof Error ? e.message : String(e)}`
             )
           }
-          // A run that was stopped meanwhile must not restart the one that replaced it.
-          if (run !== runs) {
-            return
+          const choice = boatMaster.latest()
+          if (choice) {
+            boatMaster.confirm(choice).catch(notKept)
           }
-          if (selfRestart !== null) {
-            clearTimeout(selfRestart)
-          }
-          selfRestart = setTimeout(() => {
-            selfRestart = null
-            if (run !== runs) {
-              return
-            }
-            void Promise.resolve(plugin.stop()).then(() => {
-              plugin.start(configuration, () => undefined)
-            })
-          }, 0)
-        })
+          break
+        }
       }
       const plan = new BoatPlan({
         serverId: mh.serverId,
@@ -437,7 +562,7 @@ export default function (app: ServerAPI): Plugin {
         }
       })
       const planHandle = mh.registerDataset(plan.dataset)
-      planControl = { plan, applyOwn }
+      planControl = { plan, applyOwn, master: boatMaster }
       const ownPlan = plan.get(mh.serverId)
       switch (onStart(own, plan.applied(), ownPlan?.settings ?? null)) {
         case 'publish':
@@ -756,6 +881,7 @@ export default function (app: ServerAPI): Plugin {
         placedPlugins.stop()
         placementHandle.unregister()
         planHandle.unregister()
+        masterHandle.unregister()
         stopRoleAutopilot()
         autopilot?.stop()
         course?.stop()

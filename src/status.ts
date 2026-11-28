@@ -4,6 +4,7 @@
  */
 
 import type { PeerInfo, Role } from './api.js'
+import type { MasterChoice } from './boat-master.js'
 import type { DiscoveredServer } from './discovery.js'
 import type { Placement } from './placement.js'
 import type { ServerPlan } from './plan.js'
@@ -69,4 +70,14 @@ export interface Status {
    * its list that is there. The same on every server; older versions leave it out.
    */
   placement?: Placement
+  /**
+   * The boat's choice of master, made from the console or in a server's
+   * plugin settings; null while none was made. Older versions leave it out.
+   */
+  masterChoice?: MasterChoice | null
+  /**
+   * The servers known to follow that choice: this one, and the servers
+   * paired either way whose Multihelm knows it. Older versions leave it out.
+   */
+  followsChoice?: string[]
 }

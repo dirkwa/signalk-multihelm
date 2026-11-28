@@ -15,10 +15,10 @@ chart files and shared ENC cells.
 
 ## Pairing
 
-Install Multihelm on every server and set **This server is the boat's
-master** on one of them in its plugin settings
-([The master](#the-master)). Then, on each of the others, open the Multihelm
-console from the web apps and:
+Install Multihelm on every server, open the Multihelm console from the web
+apps on one of them and make it the boat's master with **Make master** on its
+card ([The master](#the-master)). Then, on each of the others, open the
+console and:
 
 1. **Pair** with the master under **Pair with another server**: pick it from
    the servers found on the network, or enter its address.
@@ -75,10 +75,9 @@ here: where it is on board, its place to take over as master, what it takes
 over from the master and what it shares. They are kept in step as the boat
 plan, with no master, so the change reaches that server within a round and
 Multihelm restarts there with it, while the server is off too, as soon as it
-is back. Only **This server is the boat's master** stays in each server's own
-plugin settings, so the boat keeps its master whatever happens to the plan. A
-server on an older Multihelm has no entry in the plan; change its settings
-there.
+is back. A server on an older Multihelm has no entry in the plan; change its
+settings there. **Make master** on a server's card makes it the boat's master
+([The master](#the-master)).
 
 Pairing, the plugins that run on the master only or with the same settings
 on every server, and the apps the other servers have are in the console
@@ -107,8 +106,19 @@ its own.
 
 ## The master
 
-Set **This server is the boat's master** in the plugin settings of one
-server. Plugins that work on one server only (a weather router, rules,
+Make one server the boat's master with **Make master** on its card in the
+console, on any server, or with **This server is the boat's master** in its
+own plugin settings. The choice is kept in step like the boat plan, with no
+master: each server sets its own master setting from it, so the server that
+was the master stops being it, and a server that was off follows the choice
+as soon as it is back. Each choice is numbered one past the one before, and
+every server tells the others which one its setting follows; a server that
+comes back still set to be the master by an older choice does not count as
+the master while it catches up, so it does not take the role back. A server
+on an older Multihelm does not follow the choice; set it in its own plugin
+settings there.
+
+Plugins that work on one server only (a weather router, rules,
 alarms to NMEA 2000) run on the master, and the other servers use them
 through it; replicated datasets do not need a master. Every server asks its
 paired peers every 30 seconds whether they are set to be the master, apart
@@ -416,7 +426,7 @@ app.onPropertyValues('multihelm', (values) => {
   handle = mh?.registerDataset?.({
     id: 'my-plugin/things',
     list: async () => [...],     // what this server holds now
-    apply: async (entry) => {},  // take over a peer's entry (verified files)
+    apply: async (entry) => {},  // take over a peer's entry (verified files); false keeps this server's
     remove: async (key) => true  // a peer deleted it; false keeps it here
   })
 })

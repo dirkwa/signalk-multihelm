@@ -54,8 +54,12 @@ export interface DatasetDefinition {
   id: string
   /** What this server holds now. Called once per round, and after each `apply`. */
   list: () => Promise<DatasetEntry[]>
-  /** Take over a peer's entry. Throwing leaves it to be tried again next round. */
-  apply: (entry: IncomingEntry) => Promise<void>
+  /**
+   * Take over a peer's entry. Throwing leaves it to be tried again next round.
+   * Return false to keep what this server holds instead: it is then offered
+   * back to the peers as a change of this server's.
+   */
+  apply: (entry: IncomingEntry) => Promise<void> | Promise<boolean>
   /**
    * A peer deleted the entry. Return false to keep it here: it is then
    * offered back to the peers as a change of this server's.

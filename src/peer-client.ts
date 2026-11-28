@@ -63,6 +63,8 @@ export interface Hello {
   multihelm?: string
   /** It serves data of its own at `shared-data` for the other servers to take. */
   shares?: boolean
+  /** The term of the boat's choice of master its `master` follows, 0 for none; older Multihelm versions leave it out. */
+  masterTerm?: number
 }
 
 /**
@@ -76,6 +78,8 @@ export interface HelloFrom {
   master?: boolean
   /** It acts as the master now; a peer that knew otherwise asks again at once. */
   acting?: boolean
+  /** The term of the boat's choice of master it follows; a peer that follows an older one fetches the newer at once. */
+  masterTerm?: number
   signalk?: string
   multihelm?: string
 }
@@ -90,6 +94,9 @@ function helloQuery(from: HelloFrom | undefined): string {
   }
   if (from.acting !== undefined) {
     query.set('acting', from.acting ? '1' : '0')
+  }
+  if (from.masterTerm !== undefined) {
+    query.set('masterTerm', String(from.masterTerm))
   }
   if (from.signalk) {
     query.set('signalk', from.signalk)
@@ -344,6 +351,7 @@ export async function fetchHello(
   const elects = (body as { elects?: unknown }).elects
   const seesStandby = (body as { seesStandby?: unknown }).seesStandby
   const shares = (body as { shares?: unknown }).shares
+  const masterTerm = (body as { masterTerm?: unknown }).masterTerm
   return {
     ...hello,
     ...(typeof standby === 'number' && Number.isInteger(standby) && standby > 0 ? { standby } : {}),
@@ -354,7 +362,10 @@ export async function fetchHello(
       : {}),
     ...(signalk ? { signalk } : {}),
     ...(multihelm ? { multihelm } : {}),
-    ...(shares === true ? { shares } : {})
+    ...(shares === true ? { shares } : {}),
+    ...(typeof masterTerm === 'number' && Number.isInteger(masterTerm) && masterTerm >= 0
+      ? { masterTerm }
+      : {})
   }
 }
 

@@ -14,6 +14,7 @@ import express from 'express'
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 
 import type { DatasetDefinition, DatasetEntry, DatasetHandle } from '../src/api.js'
+import { BoatMaster, type MasterChoice } from '../src/boat-master.js'
 import { SETTLE_MS } from '../src/library.js'
 import { MASTER_STALE_MS, Multihelm, type MultihelmHost } from '../src/multihelm.js'
 import { downloadFile, ROUTE_PREFIX } from '../src/peer-client.js'
@@ -31,6 +32,8 @@ class FolderDataset implements DatasetDefinition {
   readonly meta = new Map<string, unknown>()
   readonly removed: string[] = []
   keep = new Set<string>()
+  /** Entries whose meta and files this server keeps over a peer's. */
+  hold = new Set<string>()
 
   constructor(readonly dir: string) {}
 
@@ -52,7 +55,10 @@ class FolderDataset implements DatasetDefinition {
     )
   }
 
-  apply = async (entry: Parameters<DatasetDefinition['apply']>[0]): Promise<void> => {
+  apply = async (entry: Parameters<DatasetDefinition['apply']>[0]): Promise<boolean> => {
+    if (this.hold.has(entry.key)) {
+      return false
+    }
     const folder = path.join(this.dir, entry.key)
     await fs.promises.mkdir(folder, { recursive: true })
     for (const file of entry.files) {
@@ -66,6 +72,7 @@ class FolderDataset implements DatasetDefinition {
       }
     }
     this.meta.set(entry.key, entry.meta)
+    return true
   }
 
   remove = async (key: string): Promise<boolean> => {
@@ -115,7 +122,8 @@ async function listen(
 async function station(
   name: string,
   master: () => boolean = () => false,
-  tls?: https.ServerOptions
+  tls?: https.ServerOptions,
+  host: Partial<MultihelmHost> = {}
 ): Promise<Station> {
   const dir = path.join(root, name, 'folder')
   fs.mkdirSync(dir, { recursive: true })
@@ -123,7 +131,8 @@ async function station(
     ...quiet(),
     serverName: () => name,
     isMaster: master,
-    versions: () => ({ signalk: '2.37.0', multihelm: `1.0.0-${name}` })
+    versions: () => ({ signalk: '2.37.0', multihelm: `1.0.0-${name}` }),
+    ...host
   })
   const dataset = new FolderDataset(dir)
   const handle = mh.registerDataset(dataset)
@@ -238,6 +247,66 @@ describe('two servers', () => {
     expect(read(a.dataset.dir, 'mine', 'cells')).toBe('cells')
     await b.mh.runRound()
     expect(read(b.dataset.dir, 'mine', 'cells')).toBe('cells')
+  })
+
+  it('offers an entry the dataset keeps over a newer one back to the peer', async () => {
+    write(a.dataset.dir, 'held', 'cells', 'cells')
+    a.dataset.meta.set('held', 'from a')
+    await a.mh.runRound()
+    await b.mh.runRound()
+    expect(b.dataset.meta.get('held')).toBe('from a')
+
+    b.dataset.meta.set('held', 'from b')
+    await b.mh.runRound()
+    a.dataset.hold.add('held')
+    await a.mh.runRound()
+    expect(a.dataset.meta.get('held')).toBe('from a')
+    a.dataset.hold.delete('held')
+    await b.mh.runRound()
+    expect(b.dataset.meta.get('held')).toBe('from a')
+    await a.mh.runRound()
+    expect(a.dataset.meta.get('held')).toBe('from a')
+  })
+
+  it('applies a choice of master it could not apply again in the next round', async () => {
+    // The follower's own version would win a tie, as one for a choice it listed before applying it would.
+    const [first, second] = a.mh.serverId < b.mh.serverId ? [a, b] : [b, a]
+    let failing = true
+    const applied: MasterChoice[] = []
+    const chooser = new BoatMaster({
+      dir: path.join(root, 'chooser-master'),
+      chosen: () => Promise.resolve(),
+      changed: () => undefined
+    })
+    const follower = new BoatMaster({
+      dir: path.join(root, 'follower-master'),
+      chosen: (choice) => {
+        if (failing) {
+          return Promise.reject(new Error('cannot save'))
+        }
+        applied.push(choice)
+        return Promise.resolve()
+      },
+      changed: () => undefined
+    })
+    const handles = [
+      first.mh.registerDataset(chooser.dataset),
+      second.mh.registerDataset(follower.dataset)
+    ]
+    try {
+      await chooser.choose('helm')
+      await first.mh.runRound()
+      await second.mh.runRound()
+      expect(follower.choice()).toBeNull()
+      failing = false
+      await second.mh.runRound()
+      expect(applied).toEqual([{ serverId: 'helm', term: 1 }])
+      expect(follower.choice()).toEqual({ serverId: 'helm', term: 1 })
+    } finally {
+      for (const handle of handles) {
+        handle.unregister()
+      }
+    }
   })
 
   it('ignores keys the dataset does not accept', async () => {
@@ -372,6 +441,64 @@ describe('the master role', () => {
     await vi.waitFor(() => {
       expect(port.mh.master()).toMatchObject({ name: 'role-now-salon' })
     })
+  })
+
+  it('counts no server whose setting follows an older choice of master', async () => {
+    const terms = new Map([
+      ['role-t-x', 1],
+      ['role-t-y', 1]
+    ])
+    const make = async (name: string): Promise<Station> => {
+      const s = await station(name, () => true, undefined, {
+        masterTerm: () => terms.get(name) ?? 0
+      })
+      stations.push(s)
+      return s
+    }
+    const x = await make('role-t-x')
+    const y = await make('role-t-y')
+    await x.mh.pair(y.url)
+    await y.mh.pair(x.url)
+    await x.mh.checkMasters()
+    await y.mh.checkMasters()
+    const [smaller, larger] = x.mh.serverId < y.mh.serverId ? [x, y] : [y, x]
+    expect(smaller.mh.role()).toBe('master')
+    expect(larger.mh.masterConflict()).toBe(true)
+
+    // The larger was made the master since; the smaller has not taken that over yet.
+    terms.set(larger === x ? 'role-t-x' : 'role-t-y', 2)
+    await smaller.mh.checkMasters()
+    expect(smaller.mh.role()).toBe('member')
+    expect(smaller.mh.masterConflict()).toBe(false)
+    await larger.mh.checkMasters()
+    expect(larger.mh.role()).toBe('master')
+    expect(larger.mh.masterConflict()).toBe(false)
+    // The larger told the smaller it acts now, when it asked for its hello.
+    await vi.waitFor(() => {
+      expect(smaller.mh.master()?.id).toBe(larger.mh.serverId)
+    })
+  })
+
+  it('fetches at once what a peer that follows a newer choice of master offers', async () => {
+    const behind = await station('role-n-behind', () => false, undefined, { masterTerm: () => 0 })
+    const ahead = await station('role-n-ahead', () => false, undefined, { masterTerm: () => 3 })
+    stations.push(behind, ahead)
+    await behind.mh.pair(ahead.url)
+    behind.mh.start()
+    try {
+      await behind.mh.runRound()
+      write(ahead.dataset.dir, 'later', 'note.txt', 'newer still')
+      await ahead.mh.runRound()
+      await behind.mh.checkMasters()
+      await vi.waitFor(
+        () => {
+          expect(read(behind.dataset.dir, 'later', 'note.txt')).toBe('newer still')
+        },
+        { timeout: 8_000 }
+      )
+    } finally {
+      behind.mh.stop()
+    }
   })
 
   it('tells status listeners when a conflict ends, though the role stays', async () => {
@@ -515,6 +642,7 @@ describe('the overview of the servers', () => {
         name: 'overview-member',
         signalk: '2.37.0',
         multihelm: '1.0.0-overview-member',
+        followsChoice: true,
         lastSeen: expect.any(Number) as number,
         online: true
       }

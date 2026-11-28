@@ -83,6 +83,8 @@ export const PairedServerSchema = Type.Object({
   name: Type.String(),
   signalk: Type.Optional(Type.String()),
   multihelm: Type.Optional(Type.String()),
+  /** It said the term of the boat's choice of master it follows, so it follows the choice. */
+  followsChoice: Type.Optional(Type.Boolean()),
   lastSeen: Type.Number()
 })
 
