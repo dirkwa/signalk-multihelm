@@ -127,8 +127,10 @@ sets by hand on one server (see `README.md`).
   failed save fails `apply` and the next round tries again. A choice still
   to be applied waits in `pending.json`, for the restart applying it
   causes; `master.json` holds the one applied, the one listed. A start
-  whose setting follows the pending choice moves it over; one made here
-  that fails is dropped. A save in a run that was replaced meanwhile fails.
+  whose setting follows the pending choice moves it over. A peer's choice
+  older than the pending one applies that first and offers it back; one
+  made here that fails leaves the pending one as it was. A save in a run
+  that was replaced meanwhile fails.
   `applied.json` holds the setting and the term it follows.
 - `console/` — the console web app Signal K serves from `public/`
   (`vite.console.config.ts`, built after the panel, which empties

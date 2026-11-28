@@ -197,6 +197,49 @@ describe("the boat's choice of master", () => {
     expect(await restarted.choose(ME)).toEqual({ serverId: ME, term: 3 })
   })
 
+  it('applies a later pending choice before an older one a peer offers, and offers it back', async () => {
+    let failing = true
+    const { master, chosen } = boatMaster(() => failing)
+    const later = { serverId: OTHER, term: 5 }
+    const older = { key: 'master', meta: { serverId: ME, term: 2 }, files: [] }
+    await expect(master.dataset.apply({ key: 'master', meta: later, files: [] })).rejects.toThrow()
+    await expect(master.dataset.apply(older)).rejects.toThrow()
+    expect(master.latest()).toEqual(later)
+    expect(boatMaster().master.latest()).toEqual(later)
+
+    failing = false
+    expect(await master.dataset.apply(older)).toBe(false)
+    expect(chosen).toEqual([later, later, later])
+    expect(master.choice()).toEqual(later)
+    expect(await master.dataset.list()).toEqual([{ key: 'master', meta: later, files: [] }])
+    expect(fs.existsSync(path.join(dir, 'master', 'pending.json'))).toBe(false)
+  })
+
+  it('applies a later pending choice also for a peer’s older than the one applied', async () => {
+    let failing = false
+    const { master } = boatMaster(() => failing)
+    await master.dataset.apply({ key: 'master', meta: { serverId: ME, term: 3 }, files: [] })
+    failing = true
+    const later = { serverId: OTHER, term: 5 }
+    await expect(master.dataset.apply({ key: 'master', meta: later, files: [] })).rejects.toThrow()
+
+    failing = false
+    const older = { key: 'master', meta: { serverId: ME, term: 2 }, files: [] }
+    expect(await master.dataset.apply(older)).toBe(false)
+    expect(master.choice()).toEqual(later)
+  })
+
+  it('keeps the pending choice when one made here fails', async () => {
+    const { master } = boatMaster(() => true)
+    const pending = { serverId: OTHER, term: 5 }
+    await expect(
+      master.dataset.apply({ key: 'master', meta: pending, files: [] })
+    ).rejects.toThrow()
+    await expect(master.choose(ME)).rejects.toThrow('cannot save')
+    expect(master.latest()).toEqual(pending)
+    expect(boatMaster().master.latest()).toEqual(pending)
+  })
+
   it('makes a choice here one term past a pending one', async () => {
     let failing = true
     const { master } = boatMaster(() => failing)
