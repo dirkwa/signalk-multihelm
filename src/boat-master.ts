@@ -132,16 +132,17 @@ export class BoatMaster {
   /**
    * Makes `serverId` the boat's master, or none for '', and returns the
    * choice; offered to the peers only once applied here. A choice that
-   * cannot be applied fails and leaves the one before it.
+   * cannot be applied fails and leaves the ones before it.
    */
   choose(serverId: string): Promise<MasterChoice> {
     return this.queued(async () => {
+      const before = this.pending
       const choice = { serverId, term: (this.latest()?.term ?? 0) + 1 }
       await this.hold(choice)
       try {
         await this.host.chosen(choice)
       } catch (error) {
-        await this.drop(choice).catch(() => undefined)
+        await this.drop(choice, before).catch(() => undefined)
         throw error
       }
       await this.keep(choice)
@@ -200,6 +201,13 @@ export class BoatMaster {
         if (current !== null && laterChoice(current, choice)) {
           return false
         }
+        const pending = this.pending
+        if (pending !== null && laterChoice(pending, choice)) {
+          // The later choice goes first, and back to the peer in place of this one.
+          await this.host.chosen(pending)
+          await this.keep(pending)
+          return false
+        }
         // Listed only once applied, so a choice that failed stays the peer's and comes again next round.
         const known = sameChoice(current, choice)
         if (!known) {
@@ -248,12 +256,20 @@ export class BoatMaster {
     }
   }
 
-  /** `choice` could not be applied; left on disk if a run that replaced this one has written since. */
-  private async drop(choice: MasterChoice): Promise<void> {
+  /**
+   * `choice` could not be applied: the one pending before it is back, on
+   * disk unless a run that replaced this one has written since.
+   */
+  private async drop(choice: MasterChoice, before: MasterChoice | null): Promise<void> {
     if (sameChoice(this.pending, choice)) {
-      this.pending = null
+      this.pending = before
     }
-    if (sameChoice(this.read(this.pendingFile), choice)) {
+    if (!sameChoice(this.read(this.pendingFile), choice)) {
+      return
+    }
+    if (before) {
+      await this.write(this.pendingFile, before)
+    } else {
       await fs.promises.rm(this.pendingFile, { force: true })
     }
   }
