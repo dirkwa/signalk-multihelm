@@ -50,6 +50,7 @@ export interface Network {
 
 interface Instance {
   service: string
+  /** The host name, in lower case as `hosts` holds it. */
   target?: string
   port?: number
   txt: Record<string, string>
@@ -184,7 +185,7 @@ export class ServerDiscovery {
   private timer: NodeJS.Timeout | null = null
   private checkTimer: NodeJS.Timeout | null = null
   private readonly instances = new Map<string, Instance>()
-  /** Per host name, each address and when it was last announced. */
+  /** Per host name in lower case, as DNS compares names, each address and when it was last announced. */
   private readonly hosts = new Map<string, Map<string, number>>()
   private readonly checks = new Map<string, Check>()
 
@@ -290,11 +291,12 @@ export class ServerDiscovery {
         if (!instance) {
           continue
         }
+        const target = record.data.target.toLowerCase()
         if (record.ttl !== 0) {
-          instance.target = record.data.target
+          instance.target = target
           instance.port = record.data.port
           instance.seen = now
-        } else if (instance.target === record.data.target && instance.port === record.data.port) {
+        } else if (instance.target === target && instance.port === record.data.port) {
           delete instance.target
           delete instance.port
         }
@@ -305,13 +307,14 @@ export class ServerDiscovery {
           instance.seen = now
         }
       } else if (record.type === 'A') {
-        const addresses = this.hosts.get(record.name) ?? new Map<string, number>()
+        const host = record.name.toLowerCase()
+        const addresses = this.hosts.get(host) ?? new Map<string, number>()
         if (record.ttl === 0) {
           addresses.delete(record.data)
         } else {
           addresses.set(record.data, now)
         }
-        this.hosts.set(record.name, addresses)
+        this.hosts.set(host, addresses)
       }
     }
     this.checkAnswers(now)

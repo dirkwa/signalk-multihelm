@@ -158,10 +158,10 @@ describe('server discovery', () => {
       ] as Answer[]
     found.takeRecords(srv('other.local', 0))
     expect(found.list()).toHaveLength(1)
-    found.takeRecords(srv('helm.local', 0))
+    found.takeRecords(srv('HELM.local', 0))
     expect(found.list()).toEqual([])
-    found.takeRecords(srv('helm.local', 120))
-    expect(found.list()).toHaveLength(1)
+    found.takeRecords(srv('Helm.local', 120))
+    expect(found.list().map((s) => s.url)).toEqual(['http://192.0.2.10'])
   })
 
   it('asks each address again every minute, also without a new announcement', async () => {
