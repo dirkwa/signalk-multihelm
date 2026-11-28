@@ -628,7 +628,10 @@ describe('a server on HTTPS', () => {
   const stations: Station[] = []
 
   /** What Signal K's HTTP port does once SSL is on. */
-  function redirectTo(host: string, port: string): http.RequestListener {
+  function redirectTo(
+    host: string,
+    port: string
+  ): (req: Pick<http.IncomingMessage, 'url'>, res: http.ServerResponse) => void {
     return (req, res) => {
       res.statusCode = 302
       res.setHeader('Location', `https://${host}:${port}${(req.url ?? '/').split('?')[0] ?? ''}`)
@@ -811,7 +814,7 @@ describe('a server on HTTPS', () => {
     const checking = racing.checkMasters()
     const stale = await heldArrived
     await racing.pair(old.url)
-    redirectTo('127.0.0.1', port)({ url: '/', headers: {} } as http.IncomingMessage, stale)
+    redirectTo('127.0.0.1', port)({ url: '/' }, stale)
     await checking
     racing.stop()
     expect(racing.peerInfo()[0]).toMatchObject({ url: b.url, state: 'paired' })
