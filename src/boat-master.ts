@@ -110,6 +110,7 @@ export class BoatMaster {
     return this.queued(async () => {
       const choice = { serverId, term: (this.current?.term ?? 0) + 1 }
       await this.write(choice)
+      this.current = choice
       this.host.changed()
       await this.host.chosen(choice)
       return choice
@@ -120,6 +121,7 @@ export class BoatMaster {
   publish(choice: MasterChoice): Promise<void> {
     return this.queued(async () => {
       await this.write(choice)
+      this.current = choice
       this.host.changed()
     })
   }
@@ -156,11 +158,13 @@ export class BoatMaster {
         if (current !== null && laterChoice(current, choice)) {
           return false
         }
+        // On disk first, for the start applying it may cause; listed only once applied,
+        // so a choice that failed stays the peer's and comes again next round.
         if (current?.term !== choice.term || current.serverId !== choice.serverId) {
           await this.write(choice)
         }
-        // Also for the choice it holds, so one this server failed to apply is tried again.
         await this.host.chosen(choice)
+        this.current = choice
         return true
       })
     },
@@ -189,6 +193,5 @@ export class BoatMaster {
     const tmp = `${this.file}.part`
     await fs.promises.writeFile(tmp, JSON.stringify(choice))
     await fs.promises.rename(tmp, this.file)
-    this.current = choice
   }
 }

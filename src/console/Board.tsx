@@ -400,8 +400,8 @@ function ServerCard({
       {column.chosen && !column.master && (
         <p className="server-note">
           {column.state === 'online'
-            ? 'Chosen to be the master; it takes over once the servers have taken the choice over.'
-            : 'Chosen to be the master; it takes over once it answers again.'}
+            ? "Chosen to be the master; the role moves to it once the boat's servers agree."
+            : "Chosen to be the master; the role moves to it once it answers again and the boat's servers agree."}
         </p>
       )}
       {masterPlugins.length > 0 && (

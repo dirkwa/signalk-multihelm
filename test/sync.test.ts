@@ -14,6 +14,7 @@ import express from 'express'
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 
 import type { DatasetDefinition, DatasetEntry, DatasetHandle } from '../src/api.js'
+import { BoatMaster, type MasterChoice } from '../src/boat-master.js'
 import { SETTLE_MS } from '../src/library.js'
 import { MASTER_STALE_MS, Multihelm, type MultihelmHost } from '../src/multihelm.js'
 import { downloadFile, ROUTE_PREFIX } from '../src/peer-client.js'
@@ -265,6 +266,47 @@ describe('two servers', () => {
     expect(b.dataset.meta.get('held')).toBe('from a')
     await a.mh.runRound()
     expect(a.dataset.meta.get('held')).toBe('from a')
+  })
+
+  it('applies a choice of master it could not apply again in the next round', async () => {
+    // The follower's own version would win a tie, as one for a choice it listed before applying it would.
+    const [first, second] = a.mh.serverId < b.mh.serverId ? [a, b] : [b, a]
+    let failing = true
+    const applied: MasterChoice[] = []
+    const chooser = new BoatMaster({
+      dir: path.join(root, 'chooser-master'),
+      chosen: () => Promise.resolve(),
+      changed: () => undefined
+    })
+    const follower = new BoatMaster({
+      dir: path.join(root, 'follower-master'),
+      chosen: (choice) => {
+        if (failing) {
+          return Promise.reject(new Error('cannot save'))
+        }
+        applied.push(choice)
+        return Promise.resolve()
+      },
+      changed: () => undefined
+    })
+    const handles = [
+      first.mh.registerDataset(chooser.dataset),
+      second.mh.registerDataset(follower.dataset)
+    ]
+    try {
+      await chooser.choose('helm')
+      await first.mh.runRound()
+      await second.mh.runRound()
+      expect(follower.choice()).toBeNull()
+      failing = false
+      await second.mh.runRound()
+      expect(applied).toEqual([{ serverId: 'helm', term: 1 }])
+      expect(follower.choice()).toEqual({ serverId: 'helm', term: 1 })
+    } finally {
+      for (const handle of handles) {
+        handle.unregister()
+      }
+    }
   })
 
   it('ignores keys the dataset does not accept', async () => {
