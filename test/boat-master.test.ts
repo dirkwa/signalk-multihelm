@@ -1,13 +1,19 @@
 import fs from 'node:fs'
+import type { AddressInfo } from 'node:net'
 import os from 'node:os'
 import path from 'node:path'
 
 import type { ServerAPI } from '@signalk/server-api'
+import express from 'express'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { PROPERTY_NAME, type MultihelmProperty } from '../src/api.js'
 import { BoatMaster, masterOnStart, type MasterChoice } from '../src/boat-master.js'
 import createPlugin from '../src/index.js'
+import { Multihelm } from '../src/multihelm.js'
+import type { PlanControl } from '../src/plan.js'
+import { registerRoutes } from '../src/routes.js'
+import { MultihelmStore } from '../src/store.js'
 
 const ME = 'me'
 const OTHER = 'other'
@@ -164,6 +170,82 @@ describe("the boat's choice of master", () => {
       { serverId: ME, term: 4 },
       { serverId: ME, term: 4 }
     ])
+  })
+
+  it('offers a choice made here only once applied, and keeps the one before when it fails', async () => {
+    let failing = false
+    const { master, changed } = boatMaster(() => failing)
+    await master.choose(ME)
+    failing = true
+    await expect(master.choose(OTHER)).rejects.toThrow('cannot save')
+    expect(master.choice()).toEqual({ serverId: ME, term: 1 })
+    expect(await master.dataset.list()).toEqual([
+      { key: 'master', meta: { serverId: ME, term: 1 }, files: [] }
+    ])
+    expect(changed()).toBe(1)
+    expect(boatMaster().master.choice()).toEqual({ serverId: ME, term: 1 })
+
+    fs.rmSync(path.join(dir, 'master'), { recursive: true })
+    const { master: first } = boatMaster(() => true)
+    await expect(first.choose(ME)).rejects.toThrow('cannot save')
+    expect(boatMaster().master.choice()).toBeNull()
+  })
+})
+
+describe('the route that chooses the master', () => {
+  async function put(serverId: unknown): Promise<number> {
+    const mh = new Multihelm(new MultihelmStore(path.join(dir, 'data')), {
+      serverName: () => 'salon',
+      isMaster: () => false,
+      debug: () => undefined,
+      error: () => undefined
+    })
+    mh.sawPairedServer({ serverId: 'odd.id', name: 'odd' })
+    mh.sawPairedServer({ serverId: 'nav-1', name: 'nav' })
+    const master = new BoatMaster({
+      dir: path.join(dir, 'master'),
+      chosen: () => Promise.resolve(),
+      changed: () => undefined
+    })
+    const e = express()
+    e.use(express.json())
+    const router = express.Router()
+    registerRoutes(
+      router,
+      () => mh,
+      () => [],
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      () => ({ master }) as unknown as PlanControl
+    )
+    e.use(router)
+    const server = e.listen(0)
+    try {
+      const { port } = server.address() as AddressInfo
+      const res = await fetch(`http://127.0.0.1:${String(port)}/master`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ serverId })
+      })
+      return res.status
+    } finally {
+      server.close()
+      mh.stop()
+    }
+  }
+
+  it('takes a server of the boat or none, and no id a stored choice could not hold', async () => {
+    expect(await put('nav-1')).toBe(200)
+    expect(await put('')).toBe(200)
+    expect(await put('odd.id')).toBe(400)
+    expect(await put('elsewhere')).toBe(400)
+    expect(await put(7)).toBe(400)
   })
 })
 

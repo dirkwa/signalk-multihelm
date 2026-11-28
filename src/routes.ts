@@ -23,7 +23,7 @@ import { MASTER_ROUTE, type MasterProxy } from './master-proxy.js'
 import type { Multihelm } from './multihelm.js'
 import type { HelloFrom } from './peer-client.js'
 import { parsePlacement, type PluginPlacement } from './placement.js'
-import { MASTER_DATASET } from './boat-master.js'
+import { isChoosableId, MASTER_DATASET } from './boat-master.js'
 import { isServerPlan, type PlanControl } from './plan.js'
 import type { SharedPluginConfig } from './shared-config.js'
 import { SHARED_DATA_ROUTE, type DataSharer } from './shared-data.js'
@@ -386,7 +386,7 @@ export function registerRoutes(
         serverId === mh.serverId ||
         mh.peerInfo().some((p) => p.state === 'paired' && p.id === serverId) ||
         mh.pairedByInfo().some((s) => s.id === serverId)
-      if (typeof serverId !== 'string' || !known) {
+      if (!isChoosableId(serverId) || !known) {
         res.status(400).json({ error: 'not a server of this boat' })
         return
       }

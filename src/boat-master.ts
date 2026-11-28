@@ -44,6 +44,11 @@ export function isMasterChoice(value: unknown): value is MasterChoice {
   return Value.Check(MasterChoiceSchema, value)
 }
 
+/** A server id a choice can name; '' names none. */
+export function isChoosableId(value: unknown): value is string {
+  return Value.Check(MasterChoiceSchema.properties.serverId, value)
+}
+
 function laterChoice(a: MasterChoice, b: MasterChoice): boolean {
   return a.term > b.term || (a.term === b.term && a.serverId > b.serverId)
 }
@@ -105,14 +110,25 @@ export class BoatMaster {
     return this.current
   }
 
-  /** Makes `serverId` the boat's master, or none for ''; returns the choice. */
+  /**
+   * Makes `serverId` the boat's master, or none for '', and returns the
+   * choice; offered to the peers only once applied here. A choice that
+   * cannot be applied fails and leaves the one before it.
+   */
   choose(serverId: string): Promise<MasterChoice> {
     return this.queued(async () => {
-      const choice = { serverId, term: (this.current?.term ?? 0) + 1 }
+      const previous = this.current
+      const choice = { serverId, term: (previous?.term ?? 0) + 1 }
+      // On disk first, for the restart applying it causes.
       await this.write(choice)
+      try {
+        await this.host.chosen(choice)
+      } catch (error) {
+        await this.restore(choice, previous).catch(() => undefined)
+        throw error
+      }
       this.current = choice
       this.host.changed()
-      await this.host.chosen(choice)
       return choice
     })
   }
@@ -185,6 +201,19 @@ export class BoatMaster {
       return isMasterChoice(raw) ? raw : null
     } catch {
       return null
+    }
+  }
+
+  /** Puts `previous` back for `choice`, unless a run that replaced this one has written since. */
+  private async restore(choice: MasterChoice, previous: MasterChoice | null): Promise<void> {
+    const onDisk = this.read()
+    if (onDisk?.term !== choice.term || onDisk.serverId !== choice.serverId) {
+      return
+    }
+    if (previous) {
+      await this.write(previous)
+    } else {
+      await fs.promises.rm(this.file, { force: true })
     }
   }
 

@@ -441,7 +441,8 @@ export default function (app: ServerAPI): Plugin {
         const step = (): Promise<void> =>
           new Promise((resolve, reject) => {
             if (run !== runs) {
-              resolve()
+              // The run that replaced this one read the settings and choices before this change.
+              reject(new Error('Multihelm restarted before it could apply this; try again'))
               return
             }
             const recorded = (): void => {
