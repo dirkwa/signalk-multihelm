@@ -24,6 +24,7 @@ import type { DatasetDefinition, DatasetEntry, IncomingEntry } from './api.js'
 export const MASTER_DATASET = 'signalk-multihelm/master'
 const KEY = 'master'
 const FILE = 'master.json'
+const PENDING_FILE = 'pending.json'
 const APPLIED_FILE = 'applied.json'
 
 export const MasterChoiceSchema = Type.Object({
@@ -51,6 +52,10 @@ export function isChoosableId(value: unknown): value is string {
 
 function laterChoice(a: MasterChoice, b: MasterChoice): boolean {
   return a.term > b.term || (a.term === b.term && a.serverId > b.serverId)
+}
+
+function sameChoice(a: MasterChoice | null, b: MasterChoice): boolean {
+  return a?.term === b.term && a.serverId === b.serverId
 }
 
 export type MasterOnStart =
@@ -96,18 +101,32 @@ export interface BoatMasterHost {
 
 export class BoatMaster {
   private readonly file: string
+  private readonly pendingFile: string
   private readonly appliedFile: string
+  /** The choice this server applied, and offers to the peers. */
   private current: MasterChoice | null
+  /** A later choice still to be applied, kept on disk for the restart applying it causes. */
+  private pending: MasterChoice | null
   private writes: Promise<unknown> = Promise.resolve()
 
   constructor(private readonly host: BoatMasterHost) {
     this.file = path.join(host.dir, FILE)
+    this.pendingFile = path.join(host.dir, PENDING_FILE)
     this.appliedFile = path.join(host.dir, APPLIED_FILE)
-    this.current = this.read()
+    this.current = this.read(this.file)
+    const pending = this.read(this.pendingFile)
+    this.pending =
+      pending && (this.current === null || laterChoice(pending, this.current)) ? pending : null
   }
 
+  /** The choice this server applied. */
   choice(): MasterChoice | null {
     return this.current
+  }
+
+  /** The choice this server is to follow: one still to be applied, else the one it applied. */
+  latest(): MasterChoice | null {
+    return this.pending ?? this.current
   }
 
   /**
@@ -117,17 +136,15 @@ export class BoatMaster {
    */
   choose(serverId: string): Promise<MasterChoice> {
     return this.queued(async () => {
-      const previous = this.current
-      const choice = { serverId, term: (previous?.term ?? 0) + 1 }
-      // On disk first, for the restart applying it causes.
-      await this.write(choice)
+      const choice = { serverId, term: (this.latest()?.term ?? 0) + 1 }
+      await this.hold(choice)
       try {
         await this.host.chosen(choice)
       } catch (error) {
-        await this.restore(choice, previous).catch(() => undefined)
+        await this.drop(choice).catch(() => undefined)
         throw error
       }
-      this.current = choice
+      await this.keep(choice)
       this.host.changed()
       return choice
     })
@@ -136,9 +153,18 @@ export class BoatMaster {
   /** A choice made in this server's plugin settings; applying it here is the caller's. */
   publish(choice: MasterChoice): Promise<void> {
     return this.queued(async () => {
-      await this.write(choice)
-      this.current = choice
+      await this.keep(choice)
       this.host.changed()
+    })
+  }
+
+  /** This server follows `choice` now; offered to the peers from here on. */
+  confirm(choice: MasterChoice): Promise<void> {
+    return this.queued(async () => {
+      if (sameChoice(this.pending, choice)) {
+        await this.keep(choice)
+        this.host.changed()
+      }
     })
   }
 
@@ -174,13 +200,15 @@ export class BoatMaster {
         if (current !== null && laterChoice(current, choice)) {
           return false
         }
-        // On disk first, for the start applying it may cause; listed only once applied,
-        // so a choice that failed stays the peer's and comes again next round.
-        if (current?.term !== choice.term || current.serverId !== choice.serverId) {
-          await this.write(choice)
+        // Listed only once applied, so a choice that failed stays the peer's and comes again next round.
+        const known = sameChoice(current, choice)
+        if (!known) {
+          await this.hold(choice)
         }
         await this.host.chosen(choice)
-        this.current = choice
+        if (!known) {
+          await this.keep(choice)
+        }
         return true
       })
     },
@@ -195,32 +223,45 @@ export class BoatMaster {
     return result
   }
 
-  private read(): MasterChoice | null {
+  private read(file: string): MasterChoice | null {
     try {
-      const raw: unknown = JSON.parse(fs.readFileSync(this.file, 'utf8'))
+      const raw: unknown = JSON.parse(fs.readFileSync(file, 'utf8'))
       return isMasterChoice(raw) ? raw : null
     } catch {
       return null
     }
   }
 
-  /** Puts `previous` back for `choice`, unless a run that replaced this one has written since. */
-  private async restore(choice: MasterChoice, previous: MasterChoice | null): Promise<void> {
-    const onDisk = this.read()
-    if (onDisk?.term !== choice.term || onDisk.serverId !== choice.serverId) {
-      return
-    }
-    if (previous) {
-      await this.write(previous)
-    } else {
-      await fs.promises.rm(this.file, { force: true })
+  /** `choice` is to be applied; on disk first, for the restart applying it causes. */
+  private async hold(choice: MasterChoice): Promise<void> {
+    await this.write(this.pendingFile, choice)
+    this.pending = choice
+  }
+
+  /** `choice` is applied: listed from here on, and no longer pending. */
+  private async keep(choice: MasterChoice): Promise<void> {
+    await this.write(this.file, choice)
+    this.current = choice
+    if (this.pending !== null) {
+      this.pending = null
+      await fs.promises.rm(this.pendingFile, { force: true })
     }
   }
 
-  private async write(choice: MasterChoice): Promise<void> {
+  /** `choice` could not be applied; left on disk if a run that replaced this one has written since. */
+  private async drop(choice: MasterChoice): Promise<void> {
+    if (sameChoice(this.pending, choice)) {
+      this.pending = null
+    }
+    if (sameChoice(this.read(this.pendingFile), choice)) {
+      await fs.promises.rm(this.pendingFile, { force: true })
+    }
+  }
+
+  private async write(file: string, choice: MasterChoice): Promise<void> {
     await fs.promises.mkdir(this.host.dir, { recursive: true })
-    const tmp = `${this.file}.part`
+    const tmp = `${file}.part`
     await fs.promises.writeFile(tmp, JSON.stringify(choice))
-    await fs.promises.rename(tmp, this.file)
+    await fs.promises.rename(tmp, file)
   }
 }

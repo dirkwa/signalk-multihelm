@@ -172,6 +172,42 @@ describe("the boat's choice of master", () => {
     ])
   })
 
+  it("keeps a peer's choice it could not apply pending, also over a restart, until applied", async () => {
+    let failing = false
+    const { master } = boatMaster(() => failing)
+    await master.choose(ME)
+    failing = true
+    const later = { serverId: OTHER, term: 2 }
+    await expect(master.dataset.apply({ key: 'master', meta: later, files: [] })).rejects.toThrow()
+    expect(master.choice()).toEqual({ serverId: ME, term: 1 })
+    expect(master.latest()).toEqual(later)
+
+    const { master: restarted, changed } = boatMaster()
+    expect(restarted.choice()).toEqual({ serverId: ME, term: 1 })
+    expect(restarted.latest()).toEqual(later)
+    expect(await restarted.dataset.list()).toEqual([
+      { key: 'master', meta: { serverId: ME, term: 1 }, files: [] }
+    ])
+    await restarted.confirm({ serverId: ME, term: 1 })
+    expect(changed()).toBe(0)
+    await restarted.confirm(later)
+    expect(restarted.choice()).toEqual(later)
+    expect(changed()).toBe(1)
+    expect(fs.existsSync(path.join(dir, 'master', 'pending.json'))).toBe(false)
+    expect(await restarted.choose(ME)).toEqual({ serverId: ME, term: 3 })
+  })
+
+  it('makes a choice here one term past a pending one', async () => {
+    let failing = true
+    const { master } = boatMaster(() => failing)
+    await expect(
+      master.dataset.apply({ key: 'master', meta: { serverId: OTHER, term: 5 }, files: [] })
+    ).rejects.toThrow()
+    failing = false
+    expect(await master.choose(ME)).toEqual({ serverId: ME, term: 6 })
+    expect(boatMaster().master.latest()).toEqual({ serverId: ME, term: 6 })
+  })
+
   it('offers a choice made here only once applied, and keeps the one before when it fails', async () => {
     let failing = false
     const { master, changed } = boatMaster(() => failing)
@@ -183,12 +219,12 @@ describe("the boat's choice of master", () => {
       { key: 'master', meta: { serverId: ME, term: 1 }, files: [] }
     ])
     expect(changed()).toBe(1)
-    expect(boatMaster().master.choice()).toEqual({ serverId: ME, term: 1 })
+    expect(boatMaster().master.latest()).toEqual({ serverId: ME, term: 1 })
 
     fs.rmSync(path.join(dir, 'master'), { recursive: true })
     const { master: first } = boatMaster(() => true)
     await expect(first.choose(ME)).rejects.toThrow('cannot save')
-    expect(boatMaster().master.choice()).toBeNull()
+    expect(boatMaster().master.latest()).toBeNull()
   })
 })
 
@@ -302,7 +338,7 @@ describe('the plugin with a choice of master', () => {
     plugin.start({ master: true }, () => undefined)
     void plugin.stop()
     fs.writeFileSync(
-      path.join(dir, 'master', 'master.json'),
+      path.join(dir, 'master', 'pending.json'),
       JSON.stringify({ serverId: OTHER, term: 3 })
     )
     const errors: string[] = []
@@ -319,13 +355,16 @@ describe('the plugin with a choice of master', () => {
       expect(errors.some((e) => e.includes('disk full'))).toBe(true)
     })
     expect(file('applied.json')).toEqual({ master: true, term: 0 })
+    expect(fs.existsSync(path.join(dir, 'master', 'master.json'))).toBe(false)
     void broken.stop()
 
     plugin.start({ master: true }, () => undefined)
     await vi.waitFor(() => {
       expect(saved).toEqual([{ master: false }])
       expect(file('applied.json')).toEqual({ master: false, term: 3 })
+      expect(file('master.json')).toEqual({ serverId: OTHER, term: 3 })
     })
+    expect(fs.existsSync(path.join(dir, 'master', 'pending.json'))).toBe(false)
     void plugin.stop()
   })
 
@@ -337,7 +376,7 @@ describe('the plugin with a choice of master', () => {
     expect(api()?.role?.()).toBeDefined()
     void plugin.stop()
     fs.writeFileSync(
-      path.join(dir, 'master', 'master.json'),
+      path.join(dir, 'master', 'pending.json'),
       JSON.stringify({ serverId: OTHER, term: 3 })
     )
 
@@ -345,6 +384,7 @@ describe('the plugin with a choice of master', () => {
     await vi.waitFor(() => {
       expect(saved).toEqual([{ master: false, takeOver: 2 }])
       expect(file('applied.json')).toEqual({ master: false, term: 3 })
+      expect(file('master.json')).toEqual({ serverId: OTHER, term: 3 })
     })
     void plugin.stop()
   })

@@ -124,11 +124,12 @@ sets by hand on one server (see `README.md`).
   the next term. A peer's choice is taken only over an older one (the later
   term, then the larger server id); otherwise `apply` keeps this server's,
   which goes back to the peers. Applying it awaits the saved setting, so a
-  failed save fails `apply` and the next round tries again. A choice is on
-  disk before it is applied, for the restart that causes, but listed only
-  once applied; one made here that fails puts the one before back. A save
-  in a run that was replaced meanwhile fails. `applied.json` holds the
-  setting and the term it follows.
+  failed save fails `apply` and the next round tries again. A choice still
+  to be applied waits in `pending.json`, for the restart applying it
+  causes; `master.json` holds the one applied, the one listed. A start
+  whose setting follows the pending choice moves it over; one made here
+  that fails is dropped. A save in a run that was replaced meanwhile fails.
+  `applied.json` holds the setting and the term it follows.
 - `console/` — the console web app Signal K serves from `public/`
   (`vite.console.config.ts`, built after the panel, which empties
   `public/`): every server side by side, read from `status`. It bundles its

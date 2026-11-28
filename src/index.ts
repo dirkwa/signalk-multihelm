@@ -377,7 +377,7 @@ export default function (app: ServerAPI): Plugin {
           masterHandle.changed()
         }
       })
-      const atStart = masterOnStart(serverId, isMaster, boatMaster.applied(), boatMaster.choice())
+      const atStart = masterOnStart(serverId, isMaster, boatMaster.applied(), boatMaster.latest())
       let masterTerm =
         atStart.action === 'publish'
           ? atStart.choice.term
@@ -507,6 +507,11 @@ export default function (app: ServerAPI): Plugin {
         )
       }
       const masterHandle = mh.registerDataset(boatMaster.dataset)
+      const notKept = (e: unknown): void => {
+        app.error(
+          `Multihelm: cannot keep the choice of master applied on this server: ${e instanceof Error ? e.message : String(e)}`
+        )
+      }
       switch (atStart.action) {
         case 'publish': {
           const { choice } = atStart
@@ -523,14 +528,17 @@ export default function (app: ServerAPI): Plugin {
           break
         }
         case 'apply': {
-          const choice = boatMaster.choice()
+          const choice = boatMaster.latest()
           if (choice) {
-            // A failed save is logged; the choice is applied again on the next start.
-            followChoice(choice).catch(() => undefined)
+            // A failed save is logged; the choice stays pending, applied again when a peer offers it or on the next start.
+            void followChoice(choice).then(
+              () => boatMaster.confirm(choice).catch(notKept),
+              () => undefined
+            )
           }
           break
         }
-        case 'record':
+        case 'record': {
           try {
             boatMaster.markApplied(atStart.applied)
           } catch (e) {
@@ -538,7 +546,12 @@ export default function (app: ServerAPI): Plugin {
               `Multihelm: cannot record the choice of master applied on this server: ${e instanceof Error ? e.message : String(e)}`
             )
           }
+          const choice = boatMaster.latest()
+          if (choice) {
+            boatMaster.confirm(choice).catch(notKept)
+          }
           break
+        }
       }
       const plan = new BoatPlan({
         serverId: mh.serverId,
